@@ -104,7 +104,7 @@ func TestRoundTrip(t *testing.T) {
 	if len(origExt) != len(gotExt) || origExt[0] != gotExt[0] {
 		t.Errorf("extension table lost: %+v vs %+v", gotExt, origExt)
 	}
-	if tops, _ := got.Top("", 5, false); len(tops) != 5 {
+	if tops, _ := got.Top("", 5, false, model.BasisApparent); len(tops) != 5 {
 		t.Errorf("top list lost: %+v", tops)
 	}
 	errs, total, _ := got.Errors(0, 10)
@@ -249,5 +249,53 @@ func TestCompressionIsWorthwhile(t *testing.T) {
 	t.Logf("%d nodes: %d bytes (%.1f bytes/node compressed)", g.NodeCount(), size, perNode)
 	if perNode > 40 {
 		t.Errorf("%.1f bytes per node is worse than the 30 B/node design estimate", perNode)
+	}
+}
+
+// A snapshot's declared array lengths are cross-checked only against a JSON
+// header in the same file, and the CRC that would reject a forgery is not
+// verified until the very end. Decoding must therefore never size an
+// allocation from a declared length: a corrupt file has to fail as an error
+// the caller can quarantine, not as a makeslice panic or an OOM kill, both of
+// which bypass FR-DATA-02 and turn one bad file into a boot loop.
+func TestReadPayloadRefusesImplausibleLengths(t *testing.T) {
+	u64 := func(v uint64) []byte {
+		return []byte{byte(v >> 56), byte(v >> 48), byte(v >> 40), byte(v >> 32),
+			byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
+	}
+	cases := map[string]struct {
+		header  Header
+		payload []byte
+	}{
+		"node count beyond the arena limit": {
+			header:  Header{Nodes: 1 << 48},
+			payload: u64(1 << 48),
+		},
+		"node count with no nodes behind it": {
+			header:  Header{Nodes: 500_000_000},
+			payload: u64(500_000_000),
+		},
+		"name bytes beyond the arena limit": {
+			header:  Header{Nodes: 0, NameBytes: 1 << 40},
+			payload: append(u64(0), u64(1<<40)...),
+		},
+		"name bytes with no bytes behind them": {
+			header:  Header{Nodes: 0, NameBytes: 1 << 30},
+			payload: append(u64(0), u64(1<<30)...),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panicked instead of returning an error: %v", r)
+				}
+			}()
+			if _, err := readPayload(strings.NewReader(string(tc.payload)), tc.header); err == nil {
+				t.Fatal("want an error, got nil")
+			} else if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("want ErrCorrupt, got %v", err)
+			}
+		})
 	}
 }

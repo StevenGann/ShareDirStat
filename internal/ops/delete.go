@@ -115,6 +115,15 @@ type ClientInfo struct {
 
 // --- confirmation tokens ---------------------------------------------------
 
+// tokenItem binds a confirmation token to one preview.
+//
+// nameToType is the text FR-DEL-02 asks a human to type for a directory. It is
+// recorded for the preview response only, and is deliberately not re-checked
+// on confirm: the *token* is the security control (single-use, bound to the
+// exact share and path set), while the typed name is friction for a person at
+// a keyboard. A client holding the token already holds the name, so verifying
+// it server-side would add ceremony rather than protection. The README and
+// SPECIFICATION say so explicitly, so the gate is not mistaken for a control.
 type tokenItem struct {
 	shareID    string
 	generation string

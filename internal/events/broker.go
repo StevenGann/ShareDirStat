@@ -44,8 +44,12 @@ type Publisher interface {
 const ReplayDepth = 100
 
 // SubscriberBuffer is the per-subscriber queue depth. Progress events are
-// frequent; a slow client is dropped rather than stalling a scan.
-const SubscriberBuffer = 64
+// frequent; a slow client is dropped rather than stalling a scan. It is at
+// least ReplayDepth so that a full replay always fits: a smaller buffer
+// silently discards the *newest* replayed events (the ring is replayed
+// oldest-first), which is exactly the terminal scan.completed a reconnecting
+// client needs, and leaves the new subscription starting out already full.
+const SubscriberBuffer = ReplayDepth
 
 type subscriber struct {
 	ch      chan Event

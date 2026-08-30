@@ -3,7 +3,9 @@
 package share
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sort"
@@ -150,34 +152,50 @@ func fsType(f *Filesystem) string {
 // updates the state accordingly. A share that becomes available again moves
 // to never-scanned (a later milestone restores ready when a snapshot exists).
 func (s *Share) Check() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.checkedAt = time.Now()
-
+	// Every syscall below is done *outside* the lock. Config is immutable
+	// after construction, so reading Path needs none, and a share on a hung
+	// NFS mount would otherwise hold the write lock in uninterruptible sleep
+	// forever -- blocking Snapshot() and so GET /api/v1/shares for every
+	// other, perfectly healthy, share.
+	unavailable := ""
 	fi, err := os.Stat(s.Config.Path)
 	switch {
 	case err != nil:
-		s.setUnavailable(fmt.Sprintf("cannot stat path: %v", err))
-		return
+		unavailable = fmt.Sprintf("cannot stat path: %v", err)
 	case !fi.IsDir():
-		s.setUnavailable("path is not a directory")
-		return
+		unavailable = "path is not a directory"
 	}
-	f, err := os.Open(s.Config.Path)
-	if err != nil {
-		s.setUnavailable(fmt.Sprintf("cannot open directory: %v", err))
-		return
+	if unavailable == "" {
+		f, ferr := os.Open(s.Config.Path)
+		if ferr != nil {
+			unavailable = fmt.Sprintf("cannot open directory: %v", ferr)
+		} else {
+			_, rerr := f.Readdirnames(1)
+			_ = f.Close()
+			if rerr != nil && !errors.Is(rerr, io.EOF) {
+				unavailable = fmt.Sprintf("cannot read directory: %v", rerr)
+			}
+		}
 	}
-	_, err = f.Readdirnames(1)
-	_ = f.Close()
-	if err != nil && err.Error() != "EOF" {
-		s.setUnavailable(fmt.Sprintf("cannot read directory: %v", err))
-		return
+	var filesystem *Filesystem
+	if unavailable == "" {
+		filesystem = lookupFilesystem(s.Config.Path)
 	}
 
-	s.fs = lookupFilesystem(s.Config.Path)
-	s.err = ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkedAt = time.Now()
+	if unavailable != "" {
+		s.setUnavailable(unavailable)
+		return
+	}
+	s.fs = filesystem
 	if s.state == StateUnavailable {
+		// Only a share recovering from unavailable gets its state reset. Any
+		// other error (a failed scan, say) keeps both its state and the
+		// message explaining it: clearing the message alone would leave the
+		// UI showing a red share with no reason.
+		s.err = ""
 		if s.gen.Load() != nil {
 			s.state = StateReady
 		} else {

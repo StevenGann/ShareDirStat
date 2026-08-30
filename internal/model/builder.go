@@ -18,9 +18,13 @@ var ErrTooManyNodes = errors.New("share exceeds the configured node limit")
 var ErrArenaFull = errors.New("share is too large for the in-memory arena")
 
 // MaxNodes and MaxNameBytes are the arena's addressing limits.
+//
+// Both are compared against a slice length, so they are capped at math.MaxInt
+// as well: on a 32-bit build a uint32 index outruns what a slice can hold, and
+// an untyped 2^32-1 constant would not even compile against an int.
 const (
-	MaxNodes     = math.MaxUint32 - 1
-	MaxNameBytes = math.MaxUint32 - 1
+	MaxNodes     = min(math.MaxUint32-1, math.MaxInt)
+	MaxNameBytes = min(math.MaxUint32-1, math.MaxInt)
 )
 
 // Builder accumulates nodes during a parallel crawl and produces a finalized
@@ -339,7 +343,7 @@ func (g *Generation) buildIndexes(topN int) {
 		if topN > 0 {
 			s := n.Sized(g.basis)
 			if len(top) < topN || s > worst {
-				top = insertTop(g, top, uint32(i), topN)
+				top = insertTop(g, top, uint32(i), topN, g.basis)
 				worst = g.nodes[top[len(top)-1]].Sized(g.basis)
 			}
 		}
@@ -361,11 +365,13 @@ func (g *Generation) buildIndexes(topN int) {
 	g.top = top
 }
 
-// insertTop keeps top sorted by size descending, bounded to n entries.
-func insertTop(g *Generation, top []uint32, idx uint32, n int) []uint32 {
-	s := g.nodes[idx].Sized(g.basis)
+// insertTop keeps top sorted by size descending in the given basis, bounded
+// to n entries. The basis is explicit because callers rank in the basis the
+// request asked for, which is not always the generation's own.
+func insertTop(g *Generation, top []uint32, idx uint32, n int, basis Basis) []uint32 {
+	s := g.nodes[idx].Sized(basis)
 	pos, _ := slices.BinarySearchFunc(top, s, func(e uint32, target uint64) int {
-		es := g.nodes[e].Sized(g.basis)
+		es := g.nodes[e].Sized(basis)
 		switch {
 		case es > target:
 			return -1

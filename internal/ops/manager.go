@@ -395,6 +395,12 @@ func (m *Manager) PurgeTrash() {
 	if !m.TrashEnabled() {
 		return
 	}
+	// The global kill-switch has to stop the purge too. It is the one delete
+	// path that is not reached through CanDelete, and the trash is precisely
+	// the data an operator who just set readonly wants left alone.
+	if m.cfg.Operations.Readonly {
+		return
+	}
 	cutoff := time.Now().Add(-m.cfg.Operations.Delete.Trash.Retention.D())
 	for _, sh := range m.trashShares() {
 		s, err := m.store(sh)

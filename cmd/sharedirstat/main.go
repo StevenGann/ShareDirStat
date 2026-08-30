@@ -44,7 +44,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	cmd := "serve"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && (!strings.HasPrefix(args[0], "-") || args[0] == "-h" || args[0] == "--help") {
 		cmd, args = args[0], args[1:]
 	}
 	switch cmd {
@@ -252,16 +252,27 @@ func serve(args []string, stderr io.Writer) int {
 	case <-ctx.Done():
 		log.Info("shutdown requested")
 	}
+	// Restore the default disposition so a second Ctrl-C or SIGTERM kills the
+	// process. Without this the handler stays installed for the whole shutdown
+	// and an operator watching it hang has no way to interrupt short of -9.
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout.D())
 	defer cancel()
 	srv.SetReady(false)
+	// Release the event streams before Shutdown. They are never idle, so
+	// Shutdown would otherwise wait out the full timeout with a single browser
+	// tab open, then report failure for what was a clean, requested stop.
+	srv.Close()
+	// Scans get part of the budget, so one blocked on a hung NFS mount cannot
+	// consume all of it and leave in-flight downloads to be cut off hard.
+	scanCtx, cancelScans := context.WithTimeout(shutdownCtx, cfg.Server.ShutdownTimeout.D()*2/3)
 	// Stop scanning first: a cancelled scan throws away its partial
 	// generation, leaving the last complete results on disk (NFR-9).
-	scans.Close(shutdownCtx)
+	scans.Close(scanCtx)
+	cancelScans()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("forced shutdown", "error", err)
-		return 1
 	}
 	log.Info("stopped")
 	return 0
@@ -313,11 +324,31 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 func healthcheck(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	listen := fs.String("listen", envOr("SDS_SERVER__LISTEN", ":8080"), "listen address of the server")
-	basePath := fs.String("base-path", envOr("SDS_SERVER__BASE_PATH", "/"), "base path of the server")
+	// The container's HEALTHCHECK runs this with no arguments, so the defaults
+	// have to find the same listen address and base path the server is using.
+	// Reading only the environment was not enough: an operator who sets either
+	// in /config/config.yaml -- the documented way -- got a probe pointed at
+	// the wrong port or path, and a permanently unhealthy container.
+	cfgPath := fs.String("config", os.Getenv("SDS_CONFIG"), "configuration file to read listen/base_path from")
+	listen := fs.String("listen", "", "listen address of the server (overrides the config file)")
+	basePath := fs.String("base-path", "", "base path of the server (overrides the config file)")
 	timeout := fs.Duration("timeout", 3*time.Second, "probe timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *listen == "" || *basePath == "" {
+		// Best effort: a config that does not load is not this command's
+		// problem to report, and the env/built-in defaults still apply.
+		l, b := ":8080", "/"
+		if cfg, _, err := config.Load(*cfgPath, config.Overrides{}); err == nil {
+			l, b = cfg.Server.Listen, cfg.Server.BasePath
+		}
+		if *listen == "" {
+			*listen = envOr("SDS_SERVER__LISTEN", l)
+		}
+		if *basePath == "" {
+			*basePath = envOr("SDS_SERVER__BASE_PATH", b)
+		}
 	}
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {

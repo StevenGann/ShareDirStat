@@ -59,6 +59,12 @@ func Default() *Config {
 			DefaultConcurrency:  4,
 			DefaultSchedule:     "0 3 * * *",
 			DefaultExcludes: []string{
+				// Keep in step with ops.TrashDir, which this package cannot
+				// import without a cycle. FR-DEL-07 requires the trash to be
+				// excluded from scans: without it, a trashed folder is
+				// re-indexed on the next scan and the space it "freed" comes
+				// straight back, and the trash becomes selectable for delete.
+				"**/.sharedirstat-trash",
 				"**/.snapshot", "**/@eaDir", "**/#recycle", "**/.Trash-*", "**/lost+found",
 			},
 			SizeBasis:        "apparent",
@@ -276,8 +282,17 @@ func discover(cfg *Config) ([]Warning, error) {
 	seen := map[string]string{}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
+		}
+		// DirEntry.IsDir reads d_type, which is DT_LNK for a symlink to a
+		// directory, so `ln -s /mnt/tank/media /shares/media` -- a very common
+		// layout -- would be skipped silently. Stat through the link instead.
+		if !e.IsDir() {
+			fi, err := os.Stat(filepath.Join(d.Root, e.Name()))
+			if err != nil || !fi.IsDir() {
+				continue
+			}
 		}
 		names = append(names, e.Name())
 	}
@@ -429,6 +444,9 @@ func Validate(cfg *Config) error {
 		for j, o := range cfg.Shares {
 			if i == j || o.Path == "" || s.Path == "" {
 				continue
+			}
+			if o.Path == s.Path && i > j {
+				errs = append(errs, fmt.Errorf("%s: path %s is already used by share %q (FR-SHR-03)", where, s.Path, o.ID))
 			}
 			if isSubPath(o.Path, s.Path) {
 				errs = append(errs, fmt.Errorf("%s: path %s is nested inside share %q (%s) (FR-SHR-03)", where, s.Path, o.ID, o.Path))

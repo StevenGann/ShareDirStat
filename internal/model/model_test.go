@@ -224,15 +224,15 @@ func TestTreemapPruning(t *testing.T) {
 
 func TestTopAndExtensions(t *testing.T) {
 	g := buildGen(t)
-	top, ok := g.Top("", 2, false)
+	top, ok := g.Top("", 2, false, BasisApparent)
 	if !ok || len(top) != 2 || top[0].Name != "top.iso" || top[1].Name != "b1.mkv" {
 		t.Errorf("top = %+v", top)
 	}
-	dirs, _ := g.Top("", 1, true)
+	dirs, _ := g.Top("", 1, true, BasisApparent)
 	if len(dirs) != 1 || dirs[0].Name != "b" {
 		t.Errorf("top dirs = %+v", dirs)
 	}
-	sub, _ := g.Top("a", 5, false)
+	sub, _ := g.Top("a", 5, false, BasisApparent)
 	if len(sub) != 2 || sub[0].Name != "a1.mkv" {
 		t.Errorf("top under a = %+v", sub)
 	}
