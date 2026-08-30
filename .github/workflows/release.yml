@@ -7,9 +7,6 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/sharedirstat
-
 jobs:
   verify:
     name: Verify
@@ -86,8 +83,15 @@ jobs:
       id-token: write   # keyless cosign signing
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.name.outputs.image }}
     steps:
       - uses: actions/checkout@v5
+      - name: Image name
+        id: name
+        # OCI references must be lower-case; the repository owner is not.
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sharedirstat" >> "$GITHUB_ENV"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sharedirstat" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
@@ -170,7 +174,7 @@ jobs:
       - name: Push to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm push dist/sharedirstat-*.tgz "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          helm push dist/sharedirstat-*.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
       - uses: actions/upload-artifact@v4
         with:
           name: helm-chart
@@ -199,7 +203,9 @@ jobs:
       - name: Release notes
         env:
           DIGEST: ${{ needs.image.outputs.digest }}
+          IMAGE: ${{ needs.image.outputs.image }}
         run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
           cat > notes.md <<NOTES
           ## Container image
 
@@ -220,7 +226,7 @@ jobs:
           Helm chart:
 
           \`\`\`
-          helm install sharedirstat oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/sharedirstat --version ${GITHUB_REF_NAME#v}
+          helm install sharedirstat oci://ghcr.io/${OWNER}/charts/sharedirstat --version ${GITHUB_REF_NAME#v}
           \`\`\`
 
           Binaries below are for running outside a container; \`SHA256SUMS\` covers every asset.
