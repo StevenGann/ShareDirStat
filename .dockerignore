@@ -1,12 +1,18 @@
+# What the image build must not see. Kept minimal: anything Go imports must
+# be present, including the docs package that embeds openapi.yaml.
 .git
 .github
 web/node_modules
 web/dist
+web/coverage
 bin
 dist
+deploy
+docs/*
+!docs/embed.go
+!docs/openapi.yaml
 *.md
 !README.md
-deploy
-docs
 .golangci.yml
 .editorconfig
+coverage.out
