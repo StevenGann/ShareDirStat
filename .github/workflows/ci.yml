@@ -34,7 +34,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: web/dist
@@ -57,7 +57,7 @@ jobs:
           version: latest
       - name: Test (race, coverage)
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/... ./hack/... ./web ./docs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: go-coverage
           path: coverage.out
@@ -117,7 +117,7 @@ jobs:
           go run ./cmd/sharedirstat check-config --config rendered-config.yaml --data-dir /tmp/sds-data >/dev/null
       - name: Package
         run: helm package deploy/helm/sharedirstat --destination dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: helm-chart
           path: dist/*.tgz
