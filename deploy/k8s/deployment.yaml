@@ -16,8 +16,9 @@ spec:
       labels:
         app.kubernetes.io/name: sharedirstat
     spec:
-      nodeSelector:
-        kubernetes.io/arch: arm64
+      # The image is multi-arch; uncomment to pin on a mixed cluster.
+      # nodeSelector:
+      #   kubernetes.io/arch: arm64
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000           # must match the UID that owns the share data
@@ -29,6 +30,10 @@ spec:
       containers:
         - name: sharedirstat
           image: ghcr.io/stevengann/sharedirstat:edge
+          # :edge is a moving tag, but Kubernetes defaults to IfNotPresent for
+          # any tag other than :latest, so a node that has cached edge would
+          # keep running the old image through every rollout.
+          imagePullPolicy: Always
           args: ["serve"]
           ports:
             - name: http

@@ -14,6 +14,12 @@ PLATFORMS   ?= linux/arm64,linux/amd64
 GO          ?= go
 NPM         ?= npm
 
+# `./...` descends into web/node_modules, which ships Go sources of its own
+# (flatted/golang). Once the UI deps are installed, plain `go test ./...`
+# compiles, vets and lints a third-party package that npm can replace at any
+# time. Enumerate our own packages instead.
+PKGS         = ./cmd/... ./internal/... ./hack/... ./web ./docs
+
 .PHONY: help all build web web-install web-test web-lint test test-race lint fmt vet run clean \
         docker docker-push fixture smoke bench tidy
 
@@ -41,16 +47,16 @@ web-lint: ## Lint and type-check the web UI
 	cd web && $(NPM) run lint && $(NPM) run typecheck
 
 test: ## Run Go tests
-	$(GO) test -count=1 ./...
+	$(GO) test -count=1 $(PKGS)
 
 test-race: ## Run Go tests with the race detector and coverage
-	$(GO) test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+	$(GO) test -race -count=1 -coverprofile=coverage.out -covermode=atomic $(PKGS)
 
 lint: vet ## Run golangci-lint (install: https://golangci-lint.run)
-	golangci-lint run ./...
+	golangci-lint run $(PKGS)
 
 vet: ## go vet
-	$(GO) vet ./...
+	$(GO) vet $(PKGS)
 
 fmt: ## gofmt all Go sources
 	gofmt -w $$(git ls-files '*.go')
