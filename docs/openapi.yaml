@@ -916,6 +916,12 @@ components:
             bytes: { type: integer }
             errors: { type: integer }
             excluded: { type: integer }
+            vanished:
+              type: integer
+              description: >-
+                Entries that existed at readdir but were gone by the time they
+                were stat-ed. Normal on a live share, so they are not counted
+                as errors and do not mark a directory partial.
             pending: { type: integer }
             current_path: { type: string }
             elapsed_ms: { type: integer }

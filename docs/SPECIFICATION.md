@@ -460,7 +460,7 @@ Small structured records (JSON) kept in `/data/state/<share-id>.json`: scan hist
 
 `FR-DATA-03` (SHOULD) Snapshot load for 5 M nodes completes in < 10 s on a Pi 5 from SSD.
 
-`FR-DATA-04` (MUST) After a delete, the snapshot is re-written at most once per `data.snapshot_debounce` (default 30 s), so bursts of deletes do not thrash storage.
+`FR-DATA-04` (MUST) After a delete, the snapshot is re-written at most once per `snapshot_debounce` (default 30 s), so bursts of deletes do not thrash storage.
 
 ### 8.5 Audit log
 
@@ -660,7 +660,7 @@ The UI deliberately mirrors WinDirStat's three-pane arrangement because that is 
 
 `FR-DEL-01` (MUST) Delete is available only when **all** of: `operations.readonly` is false, the share has `allow_delete: true` (default **false** — deletion is opt-in per share), the share is currently mounted read-write (checked via a test `access(W_OK)` on the parent at request time). Otherwise the UI hides the action and the API returns `403 delete_disabled` with the reason.
 
-`FR-DEL-02` (MUST) Two-step protocol: `POST /delete/preview` returns the resolved targets (kind, apparent/alloc size, file and dir counts from the model, plus a warning if the model is stale relative to the last scan or if the target is `partial`) and a `confirm` token bound to the exact path list, share id and generation. `POST /delete` requires that token; tokens expire after 5 minutes and are single-use. The UI shows the preview in a modal: full paths, totals, and for directories (or > 100 files) requires typing the item's name (`confirm_mode: name`) or ticking a checkbox (`simple`).
+`FR-DEL-02` (MUST) Two-step protocol. The **token** is the security control; the typed name is human friction and is enforced by the UI only (a client holding the token necessarily also holds the name, so a server-side check would add ceremony, not protection). `POST /delete/preview` returns the resolved targets (kind, apparent/alloc size, file and dir counts from the model, plus a warning if the model is stale relative to the last scan or if the target is `partial`) and a `confirm` token bound to the exact path list, share id and generation. `POST /delete` requires that token; tokens expire after 5 minutes and are single-use. The UI shows the preview in a modal: full paths, totals, and for directories (or > 100 files) requires typing the item's name (`confirm_mode: name`) or ticking a checkbox (`simple`).
 
 `FR-DEL-03` (MUST) Path validation (server-side, every call):
 1. Reject paths containing `\0`, `..` segments, or absolute prefixes.
@@ -709,7 +709,7 @@ Out of scope: an attacker with network access to the port (that is precisely wha
 
 ### 12.2 Host header validation
 
-`FR-SEC-01` (MUST) When `server.allowed_hosts` is non-empty, any request whose `Host` (without port) does not match an entry (exact or `*.suffix`) receives `421 Misdirected Request`. Default empty = allow all, with a startup warning recommending configuration. Mitigates DNS rebinding.
+`FR-SEC-01` (MUST) When `server.allowed_hosts` is non-empty, any request whose `Host` (without port) does not match an entry (exact or `*.suffix`) receives `421 Misdirected Request`. The operational endpoints — `/healthz`, `/readyz`, `/metrics` — are exempt: a kubelet probe, Docker's `HEALTHCHECK` and a Prometheus scrape all address the container by IP, so applying the check to them would make the recommended hardening break every documented deployment. None of them exposes file names or sizes, and none is a browser, which is what this control defends against. Default empty = allow all, with a startup warning recommending configuration. Mitigates DNS rebinding.
 
 ### 12.3 CSRF protection
 

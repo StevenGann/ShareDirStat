@@ -12,12 +12,15 @@ A three-pane view that will be familiar if you have used WinDirStat:
 
 - **Directory tree** — every folder sorted largest-first, with size bars, file
   and folder counts, owner, permissions and modification time. Sortable
-  columns, a column chooser, and full keyboard navigation. Virtualised, so a
-  folder with 200 000 entries scrolls smoothly.
+  columns, a column chooser, and keyboard navigation. Virtualised, so the rows
+  it holds scroll smoothly however large the folder; it loads the largest 500
+  children of a directory and points you at search to narrow beyond that.
 - **Treemap** — a squarified, cushioned map where every rectangle's area is
   its size. Colour by file type, by depth, or by age. Hover for details,
-  double-click a folder to zoom in, Escape to zoom out. Items too small to
-  draw are pooled into a single hatched cell, so the areas always add up.
+  double-click a folder to zoom in, Escape to zoom out. Children the server
+  pruned are pooled into a single hatched cell; children too small to draw as
+  even a sliver are dropped, so at the smallest sizes the areas are indicative
+  rather than exact.
 - **File types** — where the space went by extension, with the same colours
   the treemap uses. Click to highlight that type across the map.
 
@@ -31,9 +34,12 @@ progress, and a scan history with the list of paths that could not be read.
   resumed.
 - **Delete** files and folders. Deleting always goes through a preview: the
   server says exactly what would be removed and how much space it would
-  reclaim, and returns a single-use token bound to that exact list. A folder
-  is confirmed by typing its name. Every attempt, successful or not, is
-  written to an audit log you can read in the app.
+  reclaim, and returns a single-use token bound to that exact list. That token
+  is the control: it is good for one delete of exactly that path set on that
+  share, and expires in five minutes. A folder additionally asks you to type
+  its name — friction for a person at a keyboard, enforced in the UI, not a
+  second server-side gate. Every delete is written to an audit log you can
+  read in the app.
 - Optional **trash mode** moves items to `.sharedirstat-trash` inside the
   share instead of unlinking them, purging them after a retention period.
   The Trash view lists what is there and restores an item to exactly where
@@ -142,11 +148,16 @@ The image runs as UID 1000 by default and has no root entrypoint magic (`PUID`/`
 | `/healthz`, `/readyz` | Liveness / readiness |
 | `/metrics` | Prometheus metrics (`sharedirstat_*`) |
 
-All read endpoints accept `basis=apparent|allocated` and serve `ETag`s, so a
-polling client can revalidate cheaply. Mutating requests require the header
-`X-Requested-With: ShareDirStat` and are refused cross-origin. The full
-description is [`docs/openapi.yaml`](docs/openapi.yaml), which the running
-server also serves; a test keeps it in step with the routes.
+The browse endpoints (`tree`, `node`, `treemap`, `top`, `extensions`) accept
+`basis=apparent|allocated` — defaulting to the share's own `size_basis`, not to
+`apparent` — and serve `ETag`s, so a polling client can revalidate cheaply.
+Mutating requests require the header `X-Requested-With: ShareDirStat` and are
+refused cross-origin. `/healthz`, `/readyz` and `/metrics` are deliberately
+outside `server.allowed_hosts`, because a kubelet probe, Docker's `HEALTHCHECK`
+and a Prometheus scrape all address the container by IP; everything carrying
+share data stays behind it. The full description is
+[`docs/openapi.yaml`](docs/openapi.yaml), which the running server also serves;
+a test keeps its paths in step with the routes.
 
 ### How scanning works
 
