@@ -1,0 +1,248 @@
+/* Application layout. The three-pane arrangement mirrors WinDirStat because
+   that is the mental model the people using this already have (FR-UI-01). */
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+/* ---- header -------------------------------------------------------------- */
+
+.topbar { background: var(--surface); border-bottom: 1px solid var(--border-strong); flex: none; }
+.topbar-row { display: flex; align-items: center; gap: var(--space-5); padding: var(--space-4) var(--space-5); flex-wrap: wrap; }
+
+.brand { display: flex; align-items: center; gap: var(--space-4); }
+.brand .logo { width: 18px; height: 18px; display: block; }
+.topbar h1 {
+  font-family: var(--font-mono);
+  font-size: 14px; margin: 0; letter-spacing: 0.01em; font-weight: 650;
+}
+
+.summary { display: flex; align-items: baseline; gap: var(--space-4); }
+
+/* ---- scan progress ------------------------------------------------------- */
+
+.progress { padding: 0 var(--space-5) var(--space-4); }
+.progress-bar { height: 3px; background: var(--surface-alt); border-radius: 2px; overflow: hidden; }
+.progress-bar span {
+  display: block; height: 100%; width: 34%; background: var(--accent);
+  animation: sweep 1.1s ease-in-out infinite;
+}
+.progress-bar.paused span { animation-play-state: paused; opacity: 0.5; }
+@keyframes sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar span { animation: none; width: 100%; opacity: 0.6; }
+}
+.progress-text { display: flex; gap: 14px; align-items: baseline; margin-top: 5px; font-size: var(--fs-sm); flex-wrap: wrap; }
+.current-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- toolbar ------------------------------------------------------------- */
+
+.toolbar {
+  display: flex; align-items: center; gap: 10px; padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border); background: var(--surface-alt); flex: none;
+}
+.toolbar-sep { width: 1px; align-self: stretch; margin: var(--space-1) 0; background: var(--border); flex: none; }
+
+/* ---- pane shell ---------------------------------------------------------- */
+
+.panes { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panes-top { display: flex; min-height: 0; flex: none; }
+.pane-left { min-width: 0; display: flex; flex-direction: column; border-right: 0; }
+.pane-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.panes-bottom { flex: 1; min-height: 0; display: flex; }
+
+/* The splitter draws as a hairline but accepts the pointer well beyond it;
+   4px is not a workable drag target, touch or mouse. */
+.splitter { background: var(--border); flex: none; position: relative; touch-action: none; }
+.splitter::after { content: ''; position: absolute; inset: -6px; }
+.splitter.vertical { width: 4px; cursor: col-resize; }
+.splitter.vertical::after { inset: 0 -6px; }
+.splitter.horizontal { height: 4px; cursor: row-resize; }
+.splitter.horizontal::after { inset: -6px 0; }
+.splitter:hover, .splitter:focus-visible { background: var(--accent); }
+
+.pane-head {
+  display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) 10px; flex: none;
+  min-height: 28px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.pane-head h2 {
+  margin: 0; font-size: var(--fs-xs); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); font-weight: 650;
+}
+.pane-note { padding: var(--space-4) 10px; margin: 0; }
+.pane-scroll { flex: 1; min-height: 0; overflow: auto; }
+
+/* ---- tree ---------------------------------------------------------------- */
+
+.tree-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; background: var(--surface); overflow: hidden; }
+.tree-header-clip { flex: none; overflow: hidden; }
+.tree-header {
+  display: grid; border-bottom: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.tree-header .th {
+  padding: 5px 8px; font-size: var(--fs-xs); font-weight: 650; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.tree-header .th.sortable { cursor: pointer; user-select: none; }
+.tree-header .th.sortable:hover { color: var(--text); }
+.sort-arrow { margin-left: 3px; color: var(--accent); }
+
+.tree-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.tree-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.tr {
+  position: absolute; left: 0; right: 0; height: var(--row-h); display: grid;
+  align-items: center; border-bottom: 1px solid var(--border); cursor: default;
+}
+.tr:hover { background: var(--surface-alt); }
+.tr.selected { background: var(--accent-soft); }
+.tr.focused { box-shadow: inset 2px 0 0 var(--accent); }
+.td { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.indent { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; }
+.chevron {
+  border: 0; background: none; padding: 0 4px; min-height: 0; color: var(--muted); cursor: pointer;
+  transition: transform 0.12s ease; transform-origin: center; line-height: 1;
+}
+.chevron:hover:not(:disabled) { background: none; color: var(--text); }
+.chevron.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+.chevron-space { display: inline-block; width: 18px; text-align: center; color: var(--muted); }
+.name { overflow: hidden; text-overflow: ellipsis; }
+.name.kind-dir { font-weight: 550; }
+.name.kind-symlink { font-style: italic; color: var(--muted); }
+
+.bar {
+  display: inline-block; width: 44px; height: 7px; background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 2px; overflow: hidden; vertical-align: middle; margin-right: 6px;
+}
+.bar span { display: block; height: 100%; background: var(--bar); }
+.pct-text { display: inline-block; min-width: 34px; text-align: right; }
+.tree-foot { flex: none; padding: var(--space-2) 10px; font-size: 11.5px; border-top: 1px solid var(--border); }
+
+/* Larger tap targets in the tree when the pointer is imprecise. */
+@media (pointer: coarse) {
+  .chevron { padding: 8px 10px; }
+  .chevron-space { width: 30px; }
+}
+
+/* ---- extensions pane ----------------------------------------------------- */
+
+.ext-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; background: var(--surface); border-left: 1px solid var(--border); }
+table.ext-table { border-collapse: collapse; width: 100%; }
+table.ext-table th {
+  position: sticky; top: 0; background: var(--surface); text-align: left;
+  font-size: var(--fs-xs); font-weight: 650; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.04em; padding: var(--space-2) 8px; border-bottom: 1px solid var(--border-strong);
+}
+table.ext-table td { padding: 2px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; height: var(--row-h); }
+table.ext-table tr { cursor: pointer; }
+table.ext-table tbody tr:hover { background: var(--surface-alt); }
+table.ext-table tbody tr.selected { background: var(--accent-soft); }
+.col-swatch { width: 22px; }
+.swatch {
+  display: inline-block; width: 11px; height: 11px; border-radius: 2px;
+  border: 1px solid rgb(0 0 0 / 0.22); vertical-align: -1px;
+}
+.ext-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.col-action { width: 30px; }
+td.row-actions { white-space: nowrap; }
+/* Row-level icon buttons must fit the dense row height. */
+table .icon-button { min-height: 20px; width: 20px; padding: 0; vertical-align: middle; margin-left: var(--space-3); }
+table .icon-button .icon { width: 13px; height: 13px; }
+.chevron .icon { width: 12px; height: 12px; display: block; }
+.ext-desc { font-size: 11.5px; }
+.legend { list-style: none; margin: 0; padding: var(--space-4) 10px; display: flex; flex-direction: column; gap: 5px; }
+.legend li { display: flex; align-items: center; gap: 7px; }
+
+/* ---- treemap ------------------------------------------------------------- */
+
+.treemap-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; background: var(--surface); }
+.treemap-head {
+  display: flex; align-items: center; gap: var(--space-4); padding: 3px 10px; flex: none;
+  border-bottom: 1px solid var(--border); border-top: 1px solid var(--border);
+}
+.crumbs { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
+.crumb {
+  border: 0; background: none; min-height: 0; color: var(--accent); padding: 1px 3px;
+  cursor: pointer; text-decoration: underline;
+}
+.crumb:hover:not(:disabled) { background: var(--accent-soft); }
+.crumb.current { color: var(--text); text-decoration: none; font-weight: 600; }
+.crumb-sep { color: var(--muted); padding: 0 1px; }
+
+.treemap-canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.treemap-canvas canvas { position: absolute; inset: 0; display: block; }
+.treemap-overlay { cursor: crosshair; }
+.treemap-overlay:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.treemap-empty { padding: 1rem; }
+
+.hovercard {
+  position: absolute; z-index: 25; pointer-events: none; max-width: 320px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-1);
+  padding: var(--space-3) 9px; box-shadow: var(--shadow-2); font-size: var(--fs-sm);
+}
+.hovercard-title { font-weight: 650; word-break: break-all; margin-bottom: 2px; }
+
+/* ---- results / search ---------------------------------------------------- */
+
+.results-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; background: var(--surface); }
+.search-form { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) 10px; flex-wrap: wrap; flex: none; border-bottom: 1px solid var(--border); }
+.search-form input[type='search'] { flex: 1; min-width: 160px; }
+table.results { border-collapse: collapse; width: 100%; }
+table.results th {
+  position: sticky; top: 0; background: var(--surface); text-align: left;
+  font-size: var(--fs-xs); font-weight: 650; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.04em; padding: var(--space-2) 8px; border-bottom: 1px solid var(--border-strong);
+}
+table.results td { padding: 2px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; height: var(--row-h); }
+table.results td.wrap { white-space: normal; }
+table.results tbody tr:hover { background: var(--surface-alt); }
+table.results tbody tr.selected { background: var(--accent-soft); }
+
+/* ---- detail bar ---------------------------------------------------------- */
+
+.detail {
+  flex: none; display: flex; align-items: center; gap: 14px; padding: 5px var(--space-5);
+  border-top: 1px solid var(--border-strong); background: var(--surface); min-height: 38px;
+}
+.detail-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.detail-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.detail-facts { display: flex; gap: var(--space-5); align-items: baseline; flex-wrap: wrap; font-size: var(--fs-sm); }
+.detail-actions { display: flex; gap: var(--space-3); flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.empty-detail { color: var(--muted); }
+
+/* ---- drawer -------------------------------------------------------------- */
+
+.drawer {
+  position: fixed; right: 0; top: 0; bottom: 0; width: min(760px, 92vw); z-index: 30;
+  background: var(--surface); border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-3); overflow: auto; padding: 0 var(--space-6) var(--space-7);
+}
+.drawer-head {
+  position: sticky; top: 0; z-index: 1; background: var(--surface); display: flex;
+  align-items: center; justify-content: space-between; padding: var(--space-5) 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.drawer h2 {
+  font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin: 18px 0 6px;
+}
+.drawer-head h2 { margin: 0; }
+
+/* ---- misc ---------------------------------------------------------------- */
+
+.version-tag { position: fixed; right: 8px; bottom: 44px; font-size: var(--fs-xs); pointer-events: none; }
+
+/* Below this width the panes stack rather than shrink into uselessness. */
+@media (max-width: 1000px) {
+  .panes-top { flex-direction: column; }
+  .pane-left { width: 100% !important; flex: 1; }
+  .pane-right { border-top: 1px solid var(--border); }
+  .splitter.vertical { display: none; }
+}

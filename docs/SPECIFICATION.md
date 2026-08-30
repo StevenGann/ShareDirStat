@@ -584,13 +584,13 @@ The UI deliberately mirrors WinDirStat's three-pane arrangement because that is 
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-`FR-UI-01` (MUST) Three resizable panes: **Tree** (top-left), **Extensions** (top-right), **Treemap** (bottom); a persistent **Detail bar** for the selected item; a header with share selector and scan status. Pane sizes persist in `localStorage`.
+`FR-UI-01` (MUST) On viewports 768 px and wider, three resizable panes: **Tree** (top-left), **Extensions** (top-right), **Treemap** (bottom); a persistent **Detail bar** for the selected item; a header with share selector and scan status. Pane sizes persist in `localStorage`. Below 768 px the phone layout of `FR-UI-04` applies instead.
 
 `FR-UI-02` (MUST) Selection is a single source of truth shared by all panes: selecting in the tree highlights the treemap cell and vice-versa; selecting an extension highlights all cells of that extension in the treemap.
 
 `FR-UI-03` (MUST) The URL encodes share, selected path and treemap root (`#/media/Movies/2019?root=Movies`) so views are bookmarkable and browser back/forward work.
 
-`FR-UI-04` (MUST) Works in current Chrome, Firefox, Safari and Edge (last two major versions). Minimum viewport 1024 × 700; usable (panes stack) down to 768 px width. No mobile-first requirement.
+`FR-UI-04` (MUST) Works in current Chrome, Firefox, Safari and Edge (last two major versions). The desktop layout applies from 768 px width up (the top panes stack side-by-side above 1000 px and vertically between 768 and 1000 px). Below 768 px a touch-first phone layout applies: one view at a time (Browse, Treemap, File types) behind a bottom tab bar, a drill-down folder list in place of the indented tree, and bottom sheets for the detail panel and view options — with full feature parity: browse, treemap, file types, search, largest files, multi-select, delete with confirmation, downloads, scan control and trash. Minimum supported width 360 px. Selection, URL state and preferences are shared between the two layouts, so crossing the breakpoint (a rotation, a resized window) loses nothing but the active tab. When the primary pointer is coarse, rows and controls grow to touch size in either layout, hover-only affordances have tap equivalents (a tap-pinned treemap card in place of the hovercard, explicit zoom buttons, visible action buttons), and long-press substitutes for right-click.
 
 ### 10.2 Tree pane
 
@@ -606,7 +606,7 @@ The UI deliberately mirrors WinDirStat's three-pane arrangement because that is 
 
 `FR-UI-09` (SHOULD) Directories flagged `partial` show a warning icon with the count of errors beneath them; `mountpoint` directories show a mount icon and "not scanned (separate mount)"; hard-link duplicates show a link icon.
 
-`FR-UI-10` (SHOULD) Right-click context menu replicating the detail-bar actions.
+`FR-UI-10` (SHOULD) Right-click context menu replicating the detail-bar actions; on touch, a long-press on the same targets opens the same menu.
 
 ### 10.3 Extensions pane
 
@@ -1006,6 +1006,65 @@ per-node memory test and the query benchmarks, on amd64 and native arm64
 runners every night and on any pull request touching the scanner, model or
 snapshot code.
 
+### 16.5 UI redesign notes
+
+**Plain CSS stays.** The redesign considered Tailwind and component
+libraries and kept hand-rolled CSS: the CSP is `default-src 'self'` with
+inline styles only, so a framework buys no distribution advantage; the work
+was primarily a design-token rework, which custom properties do natively;
+and the test suite pins raw class names and accessible names that a
+class-generating framework would churn for no gain. The stylesheet is now
+split by concern (`styles/tokens.css`, `base.css`, `desktop.css`,
+`mobile.css`) with every colour, size and surface named in the tokens file.
+The nine `--treemap-*` variables and `--is-dark` remain the seam the canvas
+reads its palette through.
+
+**The manual theme override is a root attribute.** `sds.theme` in
+`localStorage` sets `data-theme` on `<html>`; the dark variable block exists
+twice (attribute selector and `prefers-color-scheme` guard) and a comment
+requires the copies to stay identical. Everything that paints outside CSS —
+the treemap canvas, the extension swatches — subscribes through one
+`useResolvedDark` hook, so a toggle repaints the canvas without a reload.
+
+**Pointer density is fixed per session.** Row height is 22 px on a fine
+pointer and 40 px on a coarse one, chosen once at load from
+`(pointer: coarse)` on both the CSS side (`--row-h`) and the TS side
+(the tree's virtualisation constant). Deliberately no live subscription:
+the fixed height is what keeps the visible window a division rather than a
+measurement pass (§16.2), and a pointer class does not change mid-session
+in practice.
+
+**Hover and double-click are accelerators, never the only path.** Every
+action they trigger has a visible or tappable equivalent: explicit zoom
+buttons and a tap-pinned info card on the treemap, a per-row "list files"
+button in the extensions pane, an action menu on right-click or long-press
+(`FR-UI-10`) replicating the detail-bar actions from one shared builder, and
+a checkbox select mode for touch multi-select (`FR-UI-08`, still additive).
+
+**Both layouts consume one props contract.** App owns all state; the
+desktop shell and the phone shell are alternative presentations of the same
+`ShellProps`, so crossing the 768 px breakpoint keeps selection, results,
+preferences and the SSE stream. Only the phone shell's active tab and
+browse position are local and reset on a layout switch.
+
+**The phone Browse view is a sibling of the tree, not a mode of it.** A
+drill-down list needs exactly one `/tree` page per screen, not the tree's
+expanded-forest cache; it reuses the same sort, selection contract, flag
+tags and formatting. The tree's 500-row page bounds the list, so it ships
+unvirtualised.
+
+**The drawers borrowed the delete dialog's modality.** The focus trap,
+Escape handling (with its documented stopPropagation) and initial-focus
+rule that the delete dialog accumulated bug-by-bug now live in one
+`useModalBehavior` hook used by the dialog, both drawers and the phone
+sheets, and focus returns to the opener on close.
+
+**Still not implemented, deliberately.** The redesign did not pick up the
+open `FR-UI` gaps that are orthogonal to layout: "load more" beyond the tree
+page (`FR-UI-06`), Ctrl/Cmd+C copy-path (`FR-UI-07`), reveal-in-tree from
+the scan-errors drawer (`FR-UI-20`), the search date range (`FR-UI-22`),
+the message catalogue (`FR-UI-27`), and the Playwright suite (§15.3).
+
 ---
 
 ## 17. Assumptions, decisions and open questions
@@ -1029,7 +1088,7 @@ snapshot code.
 - A1: All shares are visible as ordinary POSIX directories inside the container; the app never speaks NFS/SMB itself.
 - A2: Users tolerate results that are as fresh as the last scan; there is no requirement for live updates other than the app's own deletes.
 - A3: Typical deployment has 1–10 shares and 1–20 M total nodes.
-- A4: A browser on a laptop/desktop is the primary client; phone use is incidental.
+- A4: A browser on a laptop/desktop is the primary client; the phone layout (`FR-UI-04`) exists so acting on a finding from the couch works, not to drive the feature set.
 - A5: The reverse proxy in front of the app either performs authentication or the network is trusted; the README states this in the first screen.
 
 ### 17.3 Product decisions (resolved 2026-08-29 with the product owner)

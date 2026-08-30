@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type Basis, type Node, type ShareInfo } from '../api';
 import { absoluteTime, formatBytes, formatCount, formatPercent, relativeTime } from '../format';
+import { useLongPress, usePointerCoarse } from '../hooks';
+import { IconCheck, IconChevron } from './icons';
 
-/** Row height in CSS pixels. Fixed, so the window can be computed by division. */
+/** Row height in CSS pixels. Fixed per session, so the window can be computed
+ *  by division. The pair mirrors --row-h in styles/tokens.css, which switches
+ *  on the same (pointer: coarse) media feature — keep them in step. */
 const ROW_HEIGHT = 22;
+const ROW_HEIGHT_COARSE = 40;
 /** Rows rendered above and below the viewport to cover fast scrolling. */
 const OVERSCAN = 8;
 /** Children fetched per directory; the server caps this at 5000. */
@@ -69,6 +74,10 @@ interface Props {
   selectedPaths: Set<string>;
   onSelect: (node: Node, mode: 'replace' | 'toggle' | 'range') => void;
   onActivate: (node: Node) => void;
+  /** Opens the action menu for a row: right-click or touch long-press. */
+  onMenu?: (node: Node, x: number, y: number) => void;
+  /** Touch multi-select: every press toggles membership (FR-UI-08). */
+  selectMode?: boolean;
   expanded: Set<string>;
   onExpandedChange: (next: Set<string>) => void;
 }
@@ -85,12 +94,16 @@ export function Tree({
   selectedPaths,
   onSelect,
   onActivate,
+  onMenu,
+  selectMode = false,
   expanded,
   onExpandedChange,
 }: Props) {
   const [cache, setCache] = useState<Cache>({ key: '', root: null, entries: {} });
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(600);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const rowHeight = usePointerCoarse() ? ROW_HEIGHT_COARSE : ROW_HEIGHT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inFlight = useRef<Set<string>>(new Set());
 
@@ -186,15 +199,15 @@ export function Tree({
       const row = rows[next];
       if (!row) return;
       onSelect(row.node, 'replace');
-      const top = next * ROW_HEIGHT;
+      const top = next * rowHeight;
       const el = scrollRef.current;
       if (!el) return;
       if (top < el.scrollTop) el.scrollTop = top;
-      else if (top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
-        el.scrollTop = top + ROW_HEIGHT - el.clientHeight;
+      else if (top + rowHeight > el.scrollTop + el.clientHeight) {
+        el.scrollTop = top + rowHeight - el.clientHeight;
       }
     },
-    [rows, index, onSelect],
+    [rows, index, onSelect, rowHeight],
   );
 
   const onKeyDown = useCallback(
@@ -211,11 +224,11 @@ export function Tree({
           break;
         case 'PageDown':
           e.preventDefault();
-          move(Math.floor(viewport / ROW_HEIGHT));
+          move(Math.floor(viewport / rowHeight));
           break;
         case 'PageUp':
           e.preventDefault();
-          move(-Math.floor(viewport / ROW_HEIGHT));
+          move(-Math.floor(viewport / rowHeight));
           break;
         case 'Home':
           e.preventDefault();
@@ -249,7 +262,7 @@ export function Tree({
         default:
       }
     },
-    [index, rows, move, expanded, toggle, onActivate, viewport],
+    [index, rows, move, expanded, toggle, onActivate, viewport, rowHeight],
   );
 
   // --- windowing ----------------------------------------------------------
@@ -265,8 +278,8 @@ export function Tree({
     return () => ro.disconnect();
   }, []);
 
-  const first = Math.max(Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN, 0);
-  const last = Math.min(first + Math.ceil(viewport / ROW_HEIGHT) + OVERSCAN * 2, rows.length);
+  const first = Math.max(Math.floor(scrollTop / rowHeight) - OVERSCAN, 0);
+  const last = Math.min(first + Math.ceil(viewport / rowHeight) + OVERSCAN * 2, rows.length);
   const window = rows.slice(first, last);
 
   const truncations = useMemo(
@@ -296,7 +309,11 @@ export function Tree({
 
   return (
     <section className="tree-pane" aria-label={`${share.name} directory tree`}>
-      <div className="tree-header" style={{ gridTemplateColumns: template }} role="row">
+      {/* The header lives outside the scroll container so it stays put
+          vertically; the clip wrapper plus the scrollLeft sync below keep it
+          aligned when the columns are wider than the pane. */}
+      <div className="tree-header-clip" ref={headerRef}>
+        <div className="tree-header" style={{ gridTemplateColumns: template }} role="row">
         {visible.map((c) => (
           <div
             key={c.key}
@@ -316,25 +333,29 @@ export function Tree({
             {c.sort === sort && <span className="sort-arrow" aria-hidden="true">{desc ? '▾' : '▴'}</span>}
           </div>
         ))}
+        </div>
       </div>
 
       <div
         className="tree-scroll"
         ref={scrollRef}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onScroll={(e) => {
+          setScrollTop(e.currentTarget.scrollTop);
+          if (headerRef.current) headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+        }}
         role="treegrid"
         aria-rowcount={rows.length}
         tabIndex={0}
         onKeyDown={onKeyDown}
       >
-        <div style={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
+        <div style={{ height: rows.length * rowHeight, position: 'relative' }}>
           {window.map((row, i) => {
             const rowIndex = first + i;
             return (
               <TreeRow
                 key={row.node.path}
                 row={row}
-                top={rowIndex * ROW_HEIGHT}
+                top={rowIndex * rowHeight}
                 rowIndex={rowIndex}
                 template={template}
                 columns={visible}
@@ -344,9 +365,11 @@ export function Tree({
                 selected={selectedPaths.has(row.node.path)}
                 focused={selected?.path === row.node.path}
                 sizeOf={sizeOf}
+                selectMode={selectMode}
                 onToggle={() => toggle(row.node)}
                 onSelect={(mode) => onSelect(row.node, mode)}
                 onActivate={() => onActivate(row.node)}
+                onMenu={onMenu ? (x, y) => onMenu(row.node, x, y) : undefined}
               />
             );
           })}
@@ -379,9 +402,11 @@ interface RowProps {
   selected: boolean;
   focused: boolean;
   sizeOf: (n: Node) => number;
+  selectMode: boolean;
   onToggle: () => void;
   onSelect: (mode: 'replace' | 'toggle' | 'range') => void;
   onActivate: () => void;
+  onMenu?: (x: number, y: number) => void;
 }
 
 const KIND_MARK: Record<Node['kind'], string> = {
@@ -391,6 +416,34 @@ const KIND_MARK: Record<Node['kind'], string> = {
   other: '?',
   deleted: '×',
 };
+
+/** The flag tags a node can carry (FR-UI-09); shared with the browse list. */
+export function NodeTags({ node }: { node: Node }) {
+  return (
+    <>
+      {node.flags.partial && (
+        <span className="tag warn" title="Some entries below this folder could not be read">
+          partial
+        </span>
+      )}
+      {node.flags.mountpoint && (
+        <span className="tag" title="A separate filesystem; not scanned">
+          mount
+        </span>
+      )}
+      {node.flags.hardlink_dup && (
+        <span className="tag" title="Another name for a file already counted; adds no space">
+          hard link
+        </span>
+      )}
+      {node.name_b64 && (
+        <span className="tag warn" title="This name is not valid UTF-8; shown with replacements">
+          raw name
+        </span>
+      )}
+    </>
+  );
+}
 
 function TreeRow({
   row,
@@ -404,14 +457,20 @@ function TreeRow({
   selected,
   focused,
   sizeOf,
+  selectMode,
   onToggle,
   onSelect,
   onActivate,
+  onMenu,
 }: RowProps) {
   const { node, depth, parentSize } = row;
   const isDir = node.kind === 'dir';
   const size = sizeOf(node);
   const pct = parentSize > 0 ? size / parentSize : node.pct_of_parent;
+  const longPress = useLongPress((x, y) => {
+    onSelect('replace');
+    onMenu?.(x, y);
+  });
 
   const cell = (key: string) => {
     switch (key) {
@@ -446,15 +505,32 @@ function TreeRow({
       aria-expanded={isDir ? expanded : undefined}
       aria-level={depth + 1}
       onMouseDown={(e) => {
-        if (e.shiftKey) onSelect('range');
+        if (selectMode) onSelect('toggle');
+        else if (e.shiftKey) onSelect('range');
         else if (e.ctrlKey || e.metaKey) onSelect('toggle');
         else onSelect('replace');
       }}
       onDoubleClick={() => (isDir ? onToggle() : onActivate())}
+      onContextMenu={
+        onMenu &&
+        ((e) => {
+          e.preventDefault();
+          // Android raises contextmenu for a long press as well; the hook
+          // already opened the menu then.
+          longPress.cancel();
+          if (!longPress.firedRecently()) onMenu(e.clientX, e.clientY);
+        })
+      }
+      {...(onMenu ? longPress.handlers : {})}
     >
       {columns.map((c) =>
         c.key === 'name' ? (
           <div className="td name-cell" role="gridcell" key="name">
+            {selectMode && (
+              <span className={`row-check${selected ? ' on' : ''}`} aria-hidden="true">
+                {selected && <IconCheck />}
+              </span>
+            )}
             <span className="indent" style={{ paddingLeft: `${depth * 14}px` }}>
               {isDir ? (
                 <button
@@ -467,7 +543,7 @@ function TreeRow({
                   tabIndex={-1}
                   aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
                 >
-                  ▸
+                  <IconChevron />
                 </button>
               ) : (
                 <span className="chevron-space" aria-hidden="true">
@@ -477,26 +553,7 @@ function TreeRow({
               <span className={`name kind-${node.kind}`} title={node.path}>
                 {node.name}
               </span>
-              {node.flags.partial && (
-                <span className="tag warn" title="Some entries below this folder could not be read">
-                  partial
-                </span>
-              )}
-              {node.flags.mountpoint && (
-                <span className="tag" title="A separate filesystem; not scanned">
-                  mount
-                </span>
-              )}
-              {node.flags.hardlink_dup && (
-                <span className="tag" title="Another name for a file already counted; adds no space">
-                  hard link
-                </span>
-              )}
-              {node.name_b64 && (
-                <span className="tag warn" title="This name is not valid UTF-8; shown with replacements">
-                  raw name
-                </span>
-              )}
+              <NodeTags node={node} />
               {loading && <span className="tag muted">loading…</span>}
             </span>
           </div>

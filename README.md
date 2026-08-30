@@ -26,6 +26,12 @@ A three-pane view that will be familiar if you have used WinDirStat:
 
 Plus search with size and type filters, a largest-files list, live scan
 progress, and a scan history with the list of paths that could not be read.
+Light and dark themes follow your OS, with a manual override in the header.
+
+On a phone the same app becomes a touch-first layout: Browse, Treemap and
+File types behind a bottom tab bar, a drill-down folder list with thumb-sized
+rows, long-press action menus, and checkbox multi-select — everything above
+works there too, deleting included.
 
 ### Acting on what you find
 

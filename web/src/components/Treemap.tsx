@@ -1,7 +1,9 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Basis, type Node } from '../api';
 import { formatBytes, formatCount, formatPercent } from '../format';
-import { useAsyncData, useElementSize, useNow } from '../hooks';
+import { useAsyncData, useElementSize, useLongPress, useNow } from '../hooks';
+import { useResolvedDark } from '../theme';
+import { IconClose, IconZoomIn, IconZoomOut } from './icons';
 import type { ColorScheme } from '../treemap/colors';
 import { cellAt, cellForPath, layoutTreemap, type Cell } from '../treemap/layout';
 import {
@@ -26,6 +28,10 @@ interface Props {
   highlightExt: string | null;
   onZoom: (path: string) => void;
   onSelect: (node: Node) => void;
+  /** Opens the action menu for a cell: right-click or touch long-press. */
+  onMenu?: (node: Node, x: number, y: number) => void;
+  /** Phone layout: the pinned card's "Details" opens the detail sheet. */
+  onOpenDetail?: (node: Node) => void;
 }
 
 interface Tooltip {
@@ -62,6 +68,8 @@ export function Treemap({
   highlightExt,
   onZoom,
   onSelect,
+  onMenu,
+  onOpenDetail,
 }: Props) {
   const [wrapRef, size] = useElementSize<HTMLDivElement>();
   const baseRef = useRef<HTMLCanvasElement | null>(null);
@@ -71,6 +79,10 @@ export function Treemap({
   // The tooltip is stored with the cell array it was hit-tested against, so a
   // relayout invalidates it by comparison instead of through an effect.
   const [hover, setHover] = useState<{ cells: Cell[]; tip: Tooltip } | null>(null);
+  // Touch has no hover: a tap pins this card instead, invalidated the same
+  // way. It carries the tapped cell's facts plus explicit actions.
+  const [pinned, setPinned] = useState<{ cells: Cell[]; cell: Cell } | null>(null);
+  const lastPointerType = useRef('mouse');
   const now = useNow();
 
   const key = `${shareId}|${generation ?? ''}|${root}|${basis}`;
@@ -88,16 +100,14 @@ export function Treemap({
 
   // --- theme --------------------------------------------------------------
 
+  // useResolvedDark re-renders on both the OS preference and the manual
+  // override; the attribute is already mutated by the time this effect runs,
+  // so getComputedStyle sees the new variable values.
+  const dark = useResolvedDark();
   useLayoutEffect(() => {
     const el = wrapRef.current;
-    if (!el) return;
-    const read = () => setTheme(readTheme(el));
-    read();
-    if (!window.matchMedia) return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', read);
-    return () => mq.removeEventListener('change', read);
-  }, [wrapRef]);
+    if (el) setTheme(readTheme(el));
+  }, [wrapRef, dark]);
 
   // --- layout -------------------------------------------------------------
 
@@ -178,8 +188,53 @@ export function Treemap({
     [cells],
   );
 
+  /** Hit-tests viewport coordinates, for the long-press handler. */
+  const cellAtClient = useCallback(
+    (clientX: number, clientY: number): Cell | null => {
+      const el = overlayRef.current;
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      return cellAt(cells, clientX - box.left, clientY - box.top);
+    },
+    [cells],
+  );
+
+  const longPress = useLongPress((x, y) => {
+    const cell = cellAtClient(x, y);
+    if (cell?.node && onMenu) {
+      onSelect(cell.node);
+      onMenu(cell.node, x, y);
+    }
+  });
+
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!onMenu) return;
+      e.preventDefault();
+      longPress.cancel();
+      if (longPress.firedRecently()) return;
+      const cell = locate(e);
+      if (cell?.node) {
+        onSelect(cell.node);
+        onMenu(cell.node, e.clientX, e.clientY);
+      }
+    },
+    [onMenu, longPress, locate, onSelect],
+  );
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      lastPointerType.current = e.pointerType;
+      longPress.handlers.onPointerDown(e);
+    },
+    [longPress],
+  );
+
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      longPress.handlers.onPointerMove(e);
+      // A finger is not hovering; the tap-pinned card covers touch.
+      if (e.pointerType === 'touch') return;
       const cell = locate(e);
       if (!cell) {
         setHover(null);
@@ -188,15 +243,18 @@ export function Treemap({
       const box = e.currentTarget.getBoundingClientRect();
       setHover({ cells, tip: { x: e.clientX - box.left, y: e.clientY - box.top, cell } });
     },
-    [locate, cells],
+    [locate, cells, longPress],
   );
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
       const cell = locate(e);
       if (cell?.node) onSelect(cell.node);
+      // On touch a tap pins the info card — the hovercard's stand-in.
+      if (cell && lastPointerType.current === 'touch') setPinned({ cells, cell });
+      else setPinned(null);
     },
-    [locate, onSelect],
+    [locate, onSelect, cells],
   );
 
   const onDoubleClick = useCallback(
@@ -212,14 +270,29 @@ export function Treemap({
     onZoom(root.includes('/') ? root.slice(0, root.lastIndexOf('/')) : '');
   }, [root, onZoom]);
 
+  const pinnedCell = pinned?.cells === cells ? pinned.cell : null;
+
+  /** The folder an explicit "Zoom in" would enter: the pinned or selected
+   *  directory, when it is not already the root being shown. */
+  const zoomTarget = useMemo(() => {
+    const candidate = pinnedCell?.node ?? cellForPath(cells, selectedPath)?.node ?? null;
+    return candidate && candidate.kind === 'dir' && candidate.path !== root
+      ? candidate.path
+      : null;
+  }, [pinnedCell, cells, selectedPath, root]);
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        if (pinnedCell) {
+          setPinned(null);
+          return;
+        }
         zoomOut();
       }
     },
-    [zoomOut],
+    [zoomOut, pinnedCell],
   );
 
   // --- render -------------------------------------------------------------
@@ -256,11 +329,26 @@ export function Treemap({
           ))}
         </nav>
         <span className="spacer" />
-        {root !== '' && (
-          <button type="button" onClick={zoomOut}>
-            Zoom out
-          </button>
-        )}
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Zoom in"
+          title="Zoom into the selected folder"
+          disabled={!zoomTarget}
+          onClick={() => zoomTarget && onZoom(zoomTarget)}
+        >
+          <IconZoomIn />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Zoom out"
+          title="Zoom out one level"
+          disabled={root === ''}
+          onClick={zoomOut}
+        >
+          <IconZoomOut />
+        </button>
         <span className="muted small">
           {loading && generation ? 'building…' : `${formatCount(cells.length)} cells`}
         </span>
@@ -282,17 +370,82 @@ export function Treemap({
           className="treemap-overlay"
           tabIndex={0}
           role="img"
-          aria-label={`Treemap of ${root === '' ? 'the share root' : root}. Double-click a folder to zoom in, Escape to zoom out.`}
+          aria-label={`Treemap of ${root === '' ? 'the share root' : root}. Tap or click a cell to inspect it; the zoom buttons, a double-click or Escape change the level.`}
+          onPointerDown={onPointerDown}
+          onPointerUp={longPress.handlers.onPointerUp}
+          onPointerCancel={longPress.handlers.onPointerCancel}
           onPointerMove={onPointerMove}
           onPointerLeave={() => setHover(null)}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
+          onContextMenu={onContextMenu}
           onKeyDown={onKeyDown}
         />
-        {tooltip && <HoverCard tip={tooltip} basis={basis} bounds={size} />}
+        {tooltip && !pinnedCell && <HoverCard tip={tooltip} basis={basis} bounds={size} />}
+        {pinnedCell && (
+          <PinnedCard
+            cell={pinnedCell}
+            basis={basis}
+            bounds={size}
+            onClose={() => setPinned(null)}
+            onZoom={
+              pinnedCell.node?.kind === 'dir' && pinnedCell.node.path !== root
+                ? () => onZoom(pinnedCell.node!.path)
+                : undefined
+            }
+            onDetails={
+              pinnedCell.node && onOpenDetail
+                ? () => onOpenDetail(pinnedCell.node!)
+                : undefined
+            }
+          />
+        )}
       </div>
     </section>
   );
+}
+
+/** The facts shown for one cell, shared by the hovercard and pinned card. */
+function CardFacts({ cell, basis }: { cell: Cell; basis: Basis }) {
+  if (cell.kind === 'truncated') {
+    return (
+      <>
+        <div className="hovercard-title">{formatCount(cell.truncatedCount)} smaller items</div>
+        <div className="muted">{formatBytes(cell.truncatedSize)} combined</div>
+        <div className="muted small">Too small to draw individually. Zoom in to see them.</div>
+      </>
+    );
+  }
+  const node = cell.node;
+  if (!node) return null;
+  const size = basis === 'allocated' ? node.alloc : node.size;
+  return (
+    <>
+      <div className="hovercard-title">{node.path === '' ? 'Share root' : node.path}</div>
+      <div>
+        <strong>{formatBytes(size)}</strong>{' '}
+        <span className="muted">{formatPercent(node.pct_of_share)} of share</span>
+      </div>
+      {node.kind === 'dir' && (
+        <div className="muted">
+          {formatCount(node.files)} files · {formatCount(node.dirs)} folders
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Positions a card beside a point, flipped near the right or bottom edge so
+ *  it never falls outside the pane. */
+function cardPosition(x: number, y: number, bounds: { w: number; h: number }): React.CSSProperties {
+  const flipX = x > bounds.w - 260;
+  const flipY = y > bounds.h - 140;
+  return {
+    left: flipX ? undefined : x + 14,
+    right: flipX ? bounds.w - x + 14 : undefined,
+    top: flipY ? undefined : y + 16,
+    bottom: flipY ? bounds.h - y + 16 : undefined,
+  };
 }
 
 function HoverCard({
@@ -305,43 +458,59 @@ function HoverCard({
   bounds: { w: number; h: number };
 }) {
   const { cell } = tip;
-  // Flip the card to the other side of the cursor near the right or bottom
-  // edge so it never falls outside the pane.
-  const flipX = tip.x > bounds.w - 260;
-  const flipY = tip.y > bounds.h - 110;
-  const style: React.CSSProperties = {
-    left: flipX ? undefined : tip.x + 14,
-    right: flipX ? bounds.w - tip.x + 14 : undefined,
-    top: flipY ? undefined : tip.y + 16,
-    bottom: flipY ? bounds.h - tip.y + 16 : undefined,
-  };
-
-  if (cell.kind === 'truncated') {
-    return (
-      <div className="hovercard" style={style} role="tooltip">
-        <div className="hovercard-title">{formatCount(cell.truncatedCount)} smaller items</div>
-        <div className="muted">{formatBytes(cell.truncatedSize)} combined</div>
-        <div className="muted small">Too small to draw individually. Zoom in to see them.</div>
-      </div>
-    );
-  }
-  const node = cell.node;
-  if (!node) return null;
-  const size = basis === 'allocated' ? node.alloc : node.size;
+  if (cell.kind !== 'truncated' && !cell.node) return null;
   return (
-    <div className="hovercard" style={style} role="tooltip">
-      <div className="hovercard-title">{node.path === '' ? 'Share root' : node.path}</div>
-      <div>
-        <strong>{formatBytes(size)}</strong>{' '}
-        <span className="muted">{formatPercent(node.pct_of_share)} of share</span>
-      </div>
-      {node.kind === 'dir' && (
-        <div className="muted">
-          {formatCount(node.files)} files · {formatCount(node.dirs)} folders
+    <div className="hovercard" style={cardPosition(tip.x, tip.y, bounds)} role="tooltip">
+      <CardFacts cell={cell} basis={basis} />
+      {cell.node && (
+        <div className="muted small">
+          {cell.node.kind === 'dir' ? 'Double-click to zoom in' : (cell.node.ext ?? 'no extension')}
         </div>
       )}
-      <div className="muted small">
-        {node.kind === 'dir' ? 'Double-click to zoom in' : (node.ext ?? 'no extension')}
+    </div>
+  );
+}
+
+/** The touch stand-in for the hovercard: pinned by a tap, dismissed
+ *  explicitly, and carrying the actions hover cannot offer a finger. */
+function PinnedCard({
+  cell,
+  basis,
+  bounds,
+  onClose,
+  onZoom,
+  onDetails,
+}: {
+  cell: Cell;
+  basis: Basis;
+  bounds: { w: number; h: number };
+  onClose: () => void;
+  onZoom?: () => void;
+  onDetails?: () => void;
+}) {
+  if (cell.kind !== 'truncated' && !cell.node) return null;
+  const style = cardPosition(
+    Math.min(cell.rect.x + cell.rect.w / 2, bounds.w),
+    Math.min(cell.rect.y + cell.rect.h / 2, bounds.h),
+    bounds,
+  );
+  return (
+    <div className="hovercard pinned" style={style} role="status">
+      <CardFacts cell={cell} basis={basis} />
+      <div className="pinned-actions">
+        {onZoom && (
+          <button type="button" onClick={onZoom}>
+            Zoom in
+          </button>
+        )}
+        {onDetails && (
+          <button type="button" onClick={onDetails}>
+            Details
+          </button>
+        )}
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <IconClose />
+        </button>
       </div>
     </div>
   );

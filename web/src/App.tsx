@@ -13,18 +13,19 @@ import { buildHash, parseHash, sameState, type UrlState } from './urlState';
 import { formatBytes } from './format';
 import type { ColorScheme } from './treemap/colors';
 import { ShareBar } from './components/ShareBar';
-import { COLUMNS, Tree, type SortField } from './components/Tree';
-import { Treemap } from './components/Treemap';
-import { Extensions } from './components/Extensions';
-import { DetailBar } from './components/DetailBar';
+import { type SortField } from './components/Tree';
+import { DesktopShell } from './components/DesktopShell';
+import { MobileShell } from './components/MobileShell';
+import { type ShellProps } from './components/shell';
+import { usePhoneLayout } from './hooks';
 import { ScanDrawer } from './components/ScanDrawer';
-import { Splitter } from './components/Splitter';
-import { ResultsView, type ResultsMode } from './components/ResultsView';
+import { type ResultsMode } from './components/ResultsView';
 import { DeleteDialog } from './components/DeleteDialog';
 import { TrashView } from './components/TrashView';
+import { ActionMenu } from './components/ActionMenu';
+import { buildNodeActions } from './actions';
 
 const DEFAULT_COLUMNS = ['size', 'pct', 'files', 'dirs', 'mtime', 'owner'];
-const OPTIONAL_COLUMNS = COLUMNS.filter((c) => c.key !== 'name');
 
 function readStored<T>(key: string, fallback: T): T {
   try {
@@ -60,6 +61,9 @@ export default function App() {
   const [highlightExt, setHighlightExt] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Node[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ nodes: Node[]; x: number; y: number } | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const phone = usePhoneLayout();
 
   // --- preferences -------------------------------------------------------
   const [basis, setBasis] = useState<Basis>(() => readStored<Basis>('sds.basis', 'apparent'));
@@ -90,9 +94,7 @@ export default function App() {
       const [sharesRes, versionRes] = await Promise.allSettled([api.shares(), api.version()]);
       if (cancelled) return;
       if (sharesRes.status === 'fulfilled') {
-        const list = sharesRes.value.shares;
-        setShares(list);
-        setView((v) => (list.some((s) => s.id === v.share) ? v : { ...v, share: list[0]?.id ?? '' }));
+        setShares(sharesRes.value.shares);
       } else {
         setError((sharesRes.reason as Error).message);
       }
@@ -102,6 +104,7 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
 
   const current = useMemo(
     () => shares?.find((s) => s.id === view.share) ?? shares?.[0] ?? null,
@@ -122,11 +125,18 @@ export default function App() {
   // Mirror the view into the address bar. Comparing against the current hash
   // is what keeps this from fighting the listener above: a state change that
   // came from the URL already matches, so nothing is written back.
+  //
+  // The share is resolved rather than taken from view.share verbatim: the
+  // URL may name no share (bare fragment) or one that no longer exists, and
+  // while the panes keep working off the same shares[0] fallback `current`
+  // uses, an unresolved view.share used to make this effect bail — so
+  // selections silently stopped reaching the URL.
   useEffect(() => {
-    if (!view.share) return;
-    const hash = buildHash(view);
+    const share = shares?.some((s) => s.id === view.share) ? view.share : (shares?.[0]?.id ?? '');
+    if (!share) return;
+    const hash = buildHash({ ...view, share });
     if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
-  }, [view]);
+  }, [view, shares]);
 
   // Resolve the selected path from the URL into a real node once results exist.
   useEffect(() => {
@@ -255,6 +265,21 @@ export default function App() {
     setView((v) => ({ ...v, root: path }));
   }, []);
 
+  /**
+   * Opens the action menu for a node. A node already in the multi-selection
+   * targets the whole selection (matching the file managers people know);
+   * anything else becomes the new single selection first.
+   */
+  const openMenuFor = useCallback(
+    (node: Node, x: number, y: number) => {
+      const inSelection = selection.some((n) => n.path === node.path);
+      const nodes = inSelection && selection.length > 1 ? selection : [node];
+      if (!inSelection) selectNode(node, 'replace');
+      setMenu({ nodes, x, y });
+    },
+    [selection, selectNode],
+  );
+
   /** Expands the tree down to a node and selects it. */
   const reveal = useCallback(
     (node: Node) => {
@@ -306,6 +331,8 @@ export default function App() {
     setResults(null);
     setHighlightExt(null);
     setDeleting(null);
+    setMenu(null);
+    setSelectMode(false);
   }, []);
 
   const setPref = useCallback(<T,>(key: string, value: T, apply: (v: T) => void) => {
@@ -338,11 +365,13 @@ export default function App() {
         setDeleting(selection);
       } else if (e.key === 'Escape' && results) {
         setResults(null);
+      } else if (e.key === 'Escape' && selectMode) {
+        setSelectMode(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [results, selection, current?.delete_blocked]);
+  }, [results, selection, current?.delete_blocked, selectMode]);
 
   // --- render -------------------------------------------------------------
 
@@ -350,18 +379,68 @@ export default function App() {
     return <p className="loading muted">Loading shares…</p>;
   }
 
+  const shell: ShellProps | null = current
+    ? {
+        share: current,
+        shares: shares ?? [],
+        busy,
+        view,
+        selected,
+        selection,
+        expanded,
+        results,
+        highlightExt,
+        selectMode,
+        setSelectMode,
+        basis,
+        columns,
+        scheme,
+        cushion,
+        sort,
+        desc,
+        topHeight,
+        leftWidth,
+        onSelectShare: selectShare,
+        onScan: (path = '') => void startScan(path),
+        onCancelScan: () => void cancelScan(),
+        onPauseToggle: () => void pauseToggle(),
+        selectNode,
+        zoom,
+        reveal,
+        setResults,
+        setExpanded,
+        onSortChange: (s, d) => {
+          setPref('sds.sort', s, setSort);
+          setPref('sds.desc', d, setDesc);
+        },
+        setBasis: (b) => setPref('sds.basis', b, setBasis),
+        setScheme: (s) => setPref('sds.scheme', s, setScheme),
+        setCushion: (v) => setPref('sds.cushion', v, setCushion),
+        toggleColumn,
+        setTopHeight: (v) => setPref('sds.topHeight', v, setTopHeight),
+        setLeftWidth: (v) => setPref('sds.leftWidth', v, setLeftWidth),
+        setHighlightExt,
+        openHistory: () => setDrawer((d) => !d),
+        openTrash: () => setTrashOpen((t) => !t),
+        requestDelete: (nodes) => setDeleting(nodes),
+        openMenu: openMenuFor,
+      }
+    : null;
+
   return (
     <div className="app">
-      <ShareBar
-        shares={shares ?? []}
-        current={current}
-        scan={current?.scan ?? null}
-        busy={busy}
-        onSelect={selectShare}
-        onScan={() => void startScan('')}
-        onCancel={() => void cancelScan()}
-        onPauseToggle={() => void pauseToggle()}
-      />
+      {!phone && (
+        <ShareBar
+          shares={shares ?? []}
+          current={current}
+          scan={current?.scan ?? null}
+          busy={busy}
+          onSelect={selectShare}
+          onScan={() => void startScan('')}
+          onCancel={() => void cancelScan()}
+          onPauseToggle={() => void pauseToggle()}
+        />
+      )}
 
       {error && (
         <div className="banner error" role="alert">
@@ -392,179 +471,29 @@ export default function App() {
         </div>
       )}
 
-      {current && (
+      {current && shell && (
         <>
-          <div className="toolbar">
-            <fieldset className="segmented">
-              <legend className="sr-only">Size basis</legend>
-              {(['apparent', 'allocated'] as const).map((b) => (
-                <label key={b} className={basis === b ? 'on' : ''}>
-                  <input
-                    type="radio"
-                    name="basis"
-                    checked={basis === b}
-                    onChange={() => setPref('sds.basis', b, setBasis)}
-                  />
-                  {b === 'apparent' ? 'Apparent size' : 'On disk'}
-                </label>
-              ))}
-            </fieldset>
+          {phone ? <MobileShell key={current.id} {...shell} /> : <DesktopShell {...shell} />}
 
-            <label className="field">
-              <span className="sr-only">Colour by</span>
-              <select
-                value={scheme}
-                onChange={(e) => setPref('sds.scheme', e.target.value as ColorScheme, setScheme)}
-              >
-                <option value="extension">Colour by type</option>
-                <option value="depth">Colour by depth</option>
-                <option value="mtime">Colour by age</option>
-              </select>
-            </label>
-
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={cushion}
-                onChange={(e) => setPref('sds.cushion', e.target.checked, setCushion)}
-              />
-              Cushions
-            </label>
-
-            <details className="menu">
-              <summary>Columns</summary>
-              <div className="menu-body">
-                {OPTIONAL_COLUMNS.map((c) => (
-                  <label key={c.key}>
-                    <input
-                      type="checkbox"
-                      checked={columns.includes(c.key)}
-                      onChange={() => toggleColumn(c.key)}
-                    />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            </details>
-
-            <span className="spacer" />
-
-            <button type="button" onClick={() => setResults({ kind: 'search', query: '' })}>
-              Search <kbd>/</kbd>
-            </button>
-            <button type="button" onClick={() => setResults({ kind: 'largest', path: view.root })}>
-              Largest files
-            </button>
-            <button type="button" onClick={() => setDrawer((d) => !d)}>
-              Scan history
-              {current.stats && current.stats.errors > 0 ? ` · ${current.stats.errors} errors` : ''}
-            </button>
-            {current.trash_enabled && (
-              <button type="button" onClick={() => setTrashOpen((t) => !t)}>
-                Trash
-              </button>
-            )}
-          </div>
-
-          <div className="panes">
-            <div className="panes-top" style={{ height: topHeight }}>
-              <div className="pane-left" style={{ width: leftWidth }}>
-                {results ? (
-                  <ResultsView
-                    key={`${results.kind}|${
-                      results.kind === 'search' ? `${results.query}|${results.ext ?? ''}` : results.path
-                    }`}
-                    shareId={current.id}
-                    generation={current.generation}
-                    basis={basis}
-                    mode={results}
-                    scope={view.root}
-                    selected={selected}
-                    onSelect={(n) => selectNode(n, 'replace')}
-                    onReveal={reveal}
-                    onClose={() => setResults(null)}
-                  />
-                ) : (
-                  <Tree
-                    share={current}
-                    basis={basis}
-                    generation={current.generation}
-                    columns={columns}
-                    sort={sort}
-                    desc={desc}
-                    onSortChange={(s, d) => {
-                      setPref('sds.sort', s, setSort);
-                      setPref('sds.desc', d, setDesc);
-                    }}
-                    selected={selected}
-                    selectedPaths={new Set(selection.map((n) => n.path))}
-                    onSelect={selectNode}
-                    onActivate={(n) => (n.kind === 'dir' ? zoom(n.path) : selectNode(n))}
-                    expanded={expanded}
-                    onExpandedChange={setExpanded}
-                  />
-                )}
-              </div>
-
-              <Splitter
-                orientation="vertical"
-                value={leftWidth}
-                min={320}
-                max={1400}
-                onChange={(v) => setPref('sds.leftWidth', v, setLeftWidth)}
-                label="Resize the tree pane"
-              />
-
-              <div className="pane-right">
-                <Extensions
-                  shareId={current.id}
-                  generation={current.generation}
-                  basis={basis}
-                  scheme={scheme}
-                  root={view.root}
-                  selected={highlightExt}
-                  onSelect={setHighlightExt}
-                  onShowFiles={(ext) => setResults({ kind: 'search', query: '', ext })}
-                />
-              </div>
-            </div>
-
-            <Splitter
-              orientation="horizontal"
-              value={topHeight}
-              min={140}
-              max={900}
-              onChange={(v) => setPref('sds.topHeight', v, setTopHeight)}
-              label="Resize the treemap"
+          {menu && (
+            <ActionMenu
+              items={buildNodeActions(current, menu.nodes, {
+                busy,
+                onDelete: (nodes) => setDeleting(nodes),
+                onZoom: zoom,
+                onLargestHere: (path) => setResults({ kind: 'largest', path }),
+                onRescan: (path) => void startScan(path),
+              })}
+              x={menu.x}
+              y={menu.y}
+              label={
+                menu.nodes.length === 1
+                  ? `Actions for ${menu.nodes[0]?.name ?? ''}`
+                  : `Actions for ${menu.nodes.length} items`
+              }
+              onClose={() => setMenu(null)}
             />
-
-            <div className="panes-bottom">
-              <Treemap
-                shareId={current.id}
-                generation={current.generation}
-                basis={basis}
-                scheme={scheme}
-                cushion={cushion}
-                root={view.root}
-                selectedPath={selected?.path ?? null}
-                highlightExt={highlightExt}
-                onZoom={zoom}
-                onSelect={(n) => selectNode(n, 'replace')}
-              />
-            </div>
-          </div>
-
-          <DetailBar
-            share={current}
-            node={selected}
-            selection={selection}
-            basis={basis}
-            busy={busy}
-            onRescan={(path) => void startScan(path)}
-            onZoom={zoom}
-            onLargestHere={(path) => setResults({ kind: 'largest', path })}
-            onDelete={(nodes) => setDeleting(nodes)}
-          />
+          )}
 
           {deleting && deleting.length > 0 && (
             <DeleteDialog

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type DeletePreview, type DeleteResult, type Node, type ShareInfo } from '../api';
 import { formatBytes, formatCount } from '../format';
+import { useModalBehavior } from './useModalBehavior';
 
 interface Props {
   share: ShareInfo;
@@ -47,40 +48,13 @@ export function DeleteDialog({ share, nodes, onDone, onClose }: Props) {
     };
   }, [share.id, paths]);
 
-  // Focus the dialog so Escape works and screen readers announce it -- but
-  // only when nothing inside it has already claimed focus. React applies
-  // `autoFocus` during commit and this effect runs afterwards, so focusing
-  // unconditionally stole focus back from the typed-confirmation input: the
-  // user was told to type the folder name and their keystrokes went nowhere.
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (dialog.contains(document.activeElement) && document.activeElement !== dialog) return;
-    dialog.focus();
-  }, [phase.step]);
-
-  // A modal that does not trap Tab is only decoratively modal: focus walks out
-  // onto the tree and the toolbar behind the backdrop, where the user can
-  // start a scan or change the basis while a delete confirmation is open.
-  const onKeyDownTrap = useCallback((e: React.KeyboardEvent) => {
-    if (e.key !== 'Tab') return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const focusable = dialog.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0] as HTMLElement;
-    const last = focusable[focusable.length - 1] as HTMLElement;
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === dialog)) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }, []);
+  // Initial focus, Tab trap, Escape-to-close, focus restore. The focus and
+  // escape quirks this encodes are documented in useModalBehavior.
+  const { onKeyDown } = useModalBehavior(dialogRef, {
+    onClose,
+    closable: phase.step !== 'working',
+    focusKey: phase.step,
+  });
 
   const confirm = useCallback(async () => {
     if (phase.step !== 'confirm') return;
@@ -94,18 +68,6 @@ export function DeleteDialog({ share, nodes, onDone, onClose }: Props) {
       setPhase({ step: 'error', message: (e as Error).message });
     }
   }, [phase, share.id, paths, onDone]);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape' && phase.step !== 'working') {
-      e.preventDefault();
-      // App also listens for Escape on window and would close the results
-      // pane underneath the dialog the user was only trying to dismiss.
-      e.stopPropagation();
-      onClose();
-      return;
-    }
-    onKeyDownTrap(e);
-  };
 
   return (
     <div

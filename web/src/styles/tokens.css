@@ -1,0 +1,140 @@
+/* Design tokens. Every colour, size and surface the UI uses is named here.
+   The nine --treemap-* variables and --is-dark are read by the canvas at
+   runtime (Treemap readTheme); renaming them silently breaks the treemap. */
+
+:root {
+  /* ---- palette: light ------------------------------------------------- */
+  --is-dark: 0;
+  --bg: #f2f4f4;
+  --surface: #ffffff;
+  --surface-alt: #e9edee;
+  --text: #191d1f;
+  --muted: #5f686c;
+  --border: #d5dadb;
+  --border-strong: #adb6b9;
+  --accent: #0c7285;
+  --accent-contrast: #ffffff;
+  --accent-soft: #daeef2;
+  --ok: #256b45;
+  --warn: #92600d;
+  --bad: #a92d22;
+  --bar: #79b4c2;
+
+  --treemap-bg: #e9ecec;
+  --treemap-frame: #b2b9bb;
+  --treemap-header-bg: #dbe0e1;
+  --treemap-header-text: #2b3134;
+  --treemap-selection: #085b6b;
+  --treemap-hover: #15181a;
+  --treemap-truncated: #d2d6d8;
+  --treemap-truncated-line: #a2a9ac;
+
+  /* ---- scales ---------------------------------------------------------- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+
+  --radius-1: 3px;
+  --radius-2: 6px;
+
+  --shadow-1: 0 2px 8px rgb(0 0 0 / 0.12);
+  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.18);
+  --shadow-3: 0 18px 50px rgb(0 0 0 / 0.3);
+
+  /* Control and row heights. Mirrored in Tree.tsx (ROW_HEIGHT /
+     ROW_HEIGHT_COARSE), where the same pointer media feature picks the
+     value used for virtualisation math — keep the pairs in step. */
+  --ctl-h: 24px;
+  --row-h: 22px;
+
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  color-scheme: light dark;
+}
+
+/* Touch density: taller rows and controls when the primary pointer is
+   imprecise. Chosen once per session on the TS side as well. */
+@media (pointer: coarse) {
+  :root {
+    --ctl-h: 40px;
+    --row-h: 40px;
+  }
+}
+
+/* ---- palette: dark ----------------------------------------------------- */
+/* The dark block appears twice: once for the manual override attribute and
+   once for the OS preference. KEEP THE TWO BLOCKS IDENTICAL. */
+
+:root[data-theme='dark'] {
+  --is-dark: 1;
+  --bg: #121517;
+  --surface: #1a1e20;
+  --surface-alt: #22272a;
+  --text: #e7e9e8;
+  --muted: #979fa3;
+  --border: #2d3438;
+  --border-strong: #465055;
+  --accent: #4fc1d6;
+  --accent-contrast: #0c2126;
+  --accent-soft: #12333a;
+  --ok: #63bf8b;
+  --warn: #d9a441;
+  --bad: #ee8378;
+  --bar: #35707f;
+
+  --treemap-bg: #16191b;
+  --treemap-frame: #3a4246;
+  --treemap-header-bg: #272d31;
+  --treemap-header-text: #ccd2d5;
+  --treemap-selection: #8fdcec;
+  --treemap-hover: #f2f4f5;
+  --treemap-truncated: #282d30;
+  --treemap-truncated-line: #4b5257;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --is-dark: 1;
+    --bg: #121517;
+    --surface: #1a1e20;
+    --surface-alt: #22272a;
+    --text: #e7e9e8;
+    --muted: #979fa3;
+    --border: #2d3438;
+    --border-strong: #465055;
+    --accent: #4fc1d6;
+    --accent-contrast: #0c2126;
+    --accent-soft: #12333a;
+    --ok: #63bf8b;
+    --warn: #d9a441;
+    --bad: #ee8378;
+    --bar: #35707f;
+
+    --treemap-bg: #16191b;
+    --treemap-frame: #3a4246;
+    --treemap-header-bg: #272d31;
+    --treemap-header-text: #ccd2d5;
+    --treemap-selection: #8fdcec;
+    --treemap-hover: #f2f4f5;
+    --treemap-truncated: #282d30;
+    --treemap-truncated-line: #4b5257;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}

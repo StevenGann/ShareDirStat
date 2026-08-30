@@ -1,0 +1,140 @@
+/* Phone layout (< 768px) and the touch affordances shared with tablets.
+   Keep the width query in step with usePhoneLayout in hooks.ts. */
+
+/* ---- pieces that exist on any pointer/size -------------------------------- */
+
+/* Multi-select checkbox drawn on rows in select mode. */
+.row-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: none; margin: 0 var(--space-2) 0 var(--space-4);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-1);
+  background: var(--surface); color: var(--accent-contrast);
+}
+.row-check.on { background: var(--accent); border-color: var(--accent); }
+.row-check .icon { width: 12px; height: 12px; }
+.name-cell { display: flex; align-items: center; }
+.name-cell .indent { min-width: 0; }
+
+/* Pinned treemap card: the hovercard, but interactive. */
+.hovercard.pinned { pointer-events: auto; z-index: 26; }
+.pinned-actions { display: flex; gap: var(--space-3); align-items: center; margin-top: var(--space-3); }
+
+/* ---- bottom sheets -------------------------------------------------------- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 40; display: flex;
+  align-items: flex-end; justify-content: center;
+  background: rgb(0 0 0 / 0.42);
+}
+.sheet {
+  background: var(--surface); width: 100%; max-height: 85dvh;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 10px 10px 0 0; box-shadow: var(--shadow-3);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.sheet.full { height: 100dvh; max-height: none; border-radius: 0; border-top: 0; }
+.sheet:focus { outline: none; }
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-4); flex: none;
+  border-bottom: 1px solid var(--border);
+}
+.sheet-head h2 {
+  margin: 0; font-size: var(--fs-lg); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sheet-body {
+  padding: var(--space-5) var(--space-6) calc(var(--space-6) + env(safe-area-inset-bottom));
+  overflow: auto; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--space-5);
+}
+.sheet-actions { display: flex; flex-direction: column; gap: var(--space-4); }
+.sheet-actions button, .sheet-actions a.button { justify-content: center; min-height: 44px; }
+.sheet-options { display: flex; flex-direction: column; gap: var(--space-5); align-items: flex-start; }
+
+/* ---- the phone shell ------------------------------------------------------ */
+
+.mobile-shell { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mobile-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mobile-content > * { flex: 1; min-height: 0; }
+
+.mobile-header .topbar-row { flex-wrap: nowrap; }
+.mobile-header .share-field { min-width: 0; flex: 1; }
+.mobile-header .share-field select { width: 100%; }
+.mobile-header .logo { width: 20px; height: 20px; flex: none; }
+.mobile-facts { padding-top: 0; }
+
+.tabbar {
+  flex: none; display: flex; z-index: 20;
+  background: var(--surface); border-top: 1px solid var(--border-strong);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar button {
+  flex: 1; flex-direction: column; gap: 2px; min-height: 52px;
+  border: 0; border-radius: 0; background: none;
+  font-size: var(--fs-xs); color: var(--muted);
+}
+.tabbar button .icon { width: 18px; height: 18px; }
+.tabbar button[aria-current='true'] { color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
+
+.mobile-results {
+  position: fixed; inset: 0; z-index: 15; display: flex;
+  background: var(--bg);
+  padding-bottom: calc(52px + env(safe-area-inset-bottom));
+}
+.mobile-results .results-pane { flex: 1; min-width: 0; }
+
+.select-strip {
+  flex: none; display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-4) var(--space-5); background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+}
+.select-count { font-weight: 600; }
+
+/* ---- browse list ---------------------------------------------------------- */
+
+.browse-pane { display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+.browse-head {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-2) var(--space-5); flex: none;
+  border-bottom: 1px solid var(--border); min-height: 40px;
+}
+.browse-here {
+  display: flex; align-items: center; gap: var(--space-5); flex: none;
+  padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+.browse-here-facts { display: flex; align-items: baseline; gap: var(--space-4); min-width: 0; flex: 1; }
+
+.browse-list { list-style: none; margin: 0; padding: 0; }
+.browse-item {
+  display: flex; align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+.browse-item.focused { box-shadow: inset 2px 0 0 var(--accent); }
+.browse-item.selected { background: var(--accent-soft); }
+.browse-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  border: 0; border-radius: 0; background: none; text-align: left;
+  min-height: max(var(--row-h), 48px); padding: var(--space-2) 0 var(--space-2) var(--space-5);
+  justify-content: flex-start;
+}
+.browse-main:hover:not(:disabled) { background: none; }
+.browse-kind { color: var(--muted); flex: none; width: 16px; height: 16px; }
+.browse-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.browse-name .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browse-size { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.browse-size .bar { margin-right: 0; }
+.browse-go { color: var(--muted); flex: none; }
+.browse-menu { align-self: center; margin: 0 var(--space-4); flex: none; width: 40px; min-height: 40px; }
+
+/* ---- phone-width overrides ------------------------------------------------ */
+
+@media (max-width: 767px) {
+  .drawer { width: 100%; border-left: 0; z-index: 42; }
+  .modal-backdrop { padding: 0; align-items: stretch; }
+  .modal { width: 100%; max-height: none; border-radius: 0; border: 0; }
+  .version-tag { display: none; }
+  .hovercard { max-width: min(320px, 92vw); }
+  .banner { margin: var(--space-3) var(--space-4); }
+}

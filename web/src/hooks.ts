@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -67,21 +67,113 @@ export function useNow(intervalMs = 3_600_000): number {
   return now;
 }
 
-/** Tracks the viewer's colour scheme so canvas colours match the CSS. */
-export function usePrefersDark(): boolean {
-  const [dark, setDark] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia
-      ? window.matchMedia('(prefers-color-scheme: dark)').matches
-      : false,
+export interface LongPress {
+  handlers: {
+    onPointerDown: (e: React.PointerEvent) => void;
+    onPointerMove: (e: React.PointerEvent) => void;
+    onPointerUp: () => void;
+    onPointerCancel: () => void;
+  };
+  /** Abandons a pending press (e.g. when a native contextmenu arrives first). */
+  cancel: () => void;
+  /** True just after firing; guards against the double-fire on Android, where
+   *  a long press also raises a native contextmenu event. */
+  firedRecently: () => boolean;
+}
+
+/**
+ * Long-press detection for touch pointers, the touch stand-in for
+ * right-click. Mouse and pen are ignored — they have a real contextmenu.
+ */
+export function useLongPress(
+  handler: (x: number, y: number) => void,
+  { ms = 500, moveTolerance = 10 }: { ms?: number; moveTolerance?: number } = {},
+): LongPress {
+  const pending = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const firedAt = useRef(0);
+  const handlerRef = useRef(handler);
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+
+  const cancel = useCallback(() => {
+    if (pending.current) {
+      window.clearTimeout(pending.current.timer);
+      pending.current = null;
+    }
+  }, []);
+
+  // Timers must not leak past unmount (StrictMode mounts twice).
+  useEffect(() => cancel, [cancel]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      cancel();
+      const { clientX: x, clientY: y } = e;
+      pending.current = {
+        x,
+        y,
+        timer: window.setTimeout(() => {
+          pending.current = null;
+          firedAt.current = Date.now();
+          handlerRef.current(x, y);
+        }, ms),
+      };
+    },
+    [ms, cancel],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const p = pending.current;
+      if (!p) return;
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > moveTolerance) cancel();
+    },
+    [moveTolerance, cancel],
+  );
+
+  return useMemo(
+    () => ({
+      handlers: { onPointerDown, onPointerMove, onPointerUp: cancel, onPointerCancel: cancel },
+      cancel,
+      firedRecently: () => Date.now() - firedAt.current < 800,
+    }),
+    [onPointerDown, onPointerMove, cancel],
+  );
+}
+
+/**
+ * Whether the primary pointer is imprecise (touch). Read once per session,
+ * deliberately without a change subscription: the tree's virtualisation
+ * derives its fixed row height from this, and a fixed height is what lets the
+ * visible window be a division instead of a measurement pass. The CSS
+ * counterpart is the (pointer: coarse) block in styles/tokens.css.
+ */
+export function usePointerCoarse(): boolean {
+  const [coarse] = useState(
+    () => window.matchMedia?.('(pointer: coarse)').matches ?? false,
+  );
+  return coarse;
+}
+
+/**
+ * Whether the phone layout applies, WITH a change subscription — unlike the
+ * pointer type, the viewport changes on rotation and window resize. Keep the
+ * query in step with the (max-width: 767px) block in styles/mobile.css.
+ */
+export function usePhoneLayout(): boolean {
+  const [phone, setPhone] = useState(
+    () => window.matchMedia?.('(max-width: 767px)').matches ?? false,
   );
   useEffect(() => {
     if (!window.matchMedia) return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const update = (e: MediaQueryListEvent) => setDark(e.matches);
+    const mq = window.matchMedia('(max-width: 767px)');
+    const update = (e: MediaQueryListEvent) => setPhone(e.matches);
     mq.addEventListener('change', update);
     return () => mq.removeEventListener('change', update);
   }, []);
-  return dark;
+  return phone;
 }
 
 /** Observes an element's size without reading layout during render. */

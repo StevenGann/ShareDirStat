@@ -1,7 +1,9 @@
 import { useCallback, useMemo } from 'react';
 import { api, type Basis } from '../api';
 import { formatBytes, formatCount, formatPercent } from '../format';
-import { useAsyncData, useNow, usePrefersDark } from '../hooks';
+import { useAsyncData, useNow } from '../hooks';
+import { useResolvedDark } from '../theme';
+import { IconSearch } from './icons';
 import {
   depthColor,
   extensionColor,
@@ -49,7 +51,7 @@ export function Extensions({
   onSelect,
   onShowFiles,
 }: Props) {
-  const dark = usePrefersDark();
+  const dark = useResolvedDark();
   const load = useCallback(async () => (await api.extensions(shareId, root)).extensions, [shareId, root]);
   const { data: rows, error } = useAsyncData(
     `${shareId}|${generation ?? ''}|${root}`,
@@ -100,6 +102,7 @@ export function Extensions({
                 <th className="num">Files</th>
                 <th className="num">Size</th>
                 <th className="num">%</th>
+                <th className="col-action"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -147,6 +150,22 @@ export function Extensions({
                         <span style={{ width: `${Math.min(share * 100, 100).toFixed(1)}%` }} />
                       </span>
                       {formatPercent(share)}
+                    </td>
+                    <td className="col-action">
+                      {r.ext !== '' && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label={`List .${r.ext} files`}
+                          title={`List the .${r.ext} files`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onShowFiles(r.ext);
+                          }}
+                        >
+                          <IconSearch />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

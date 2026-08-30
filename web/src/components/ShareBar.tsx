@@ -1,7 +1,9 @@
 import type { ShareInfo, ScanStatus } from '../api';
 import { formatBytes, formatCount, formatRate, relativeTime, absoluteTime, truncatePath } from '../format';
+import { useThemePref, type ThemePref } from '../theme';
+import { Logo } from './icons';
 
-const STATE_LABEL: Record<ShareInfo['state'], string> = {
+export const STATE_LABEL: Record<ShareInfo['state'], string> = {
   unavailable: 'Unavailable',
   'never-scanned': 'Never scanned',
   scanning: 'Scanning',
@@ -26,7 +28,10 @@ export function ShareBar({ shares, current, scan, busy, onSelect, onScan, onCanc
   return (
     <header className="topbar">
       <div className="topbar-row">
-        <h1>ShareDirStat</h1>
+        <div className="brand">
+          <Logo />
+          <h1>ShareDirStat</h1>
+        </div>
 
         <label className="field">
           <span className="sr-only">Share</span>
@@ -64,6 +69,8 @@ export function ShareBar({ shares, current, scan, busy, onSelect, onScan, onCanc
 
         <span className="spacer" />
 
+        <ThemeSelect />
+
         {scan ? (
           <>
             <button type="button" onClick={onPauseToggle}>
@@ -96,10 +103,26 @@ export function ShareBar({ shares, current, scan, busy, onSelect, onScan, onCanc
   );
 }
 
-function ScanProgress({ scan }: { scan: ScanStatus }) {
+/** The FR-UI-24 manual theme override; 'system' keeps following the OS. */
+export function ThemeSelect() {
+  const [pref, setPref] = useThemePref();
+  return (
+    <label className="field">
+      <span className="sr-only">Theme</span>
+      <select value={pref} onChange={(e) => setPref(e.target.value as ThemePref)} aria-label="Theme">
+        <option value="system">System theme</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  );
+}
+
+/** Shared with the phone header, which has no room for the full topbar. A
+ *  full crawl has no knowable total, so this reports work done rather than a
+ *  percentage it cannot honestly compute (FR-SCAN-07). */
+export function ScanProgress({ scan }: { scan: ScanStatus }) {
   const p = scan.progress;
-  // A full crawl has no knowable total, so the bar reports work done rather
-  // than a percentage it cannot honestly compute (FR-SCAN-07).
   return (
     <div className="progress" role="status" aria-live="polite">
       <div className={`progress-bar${scan.paused ? ' paused' : ''}`} aria-hidden="true">

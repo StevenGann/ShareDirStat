@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type AuditEntry, type ScanError, type ScanRecord } from '../api';
 import { absoluteTime, formatBytes, formatCount, formatDuration, relativeTime } from '../format';
+import { IconClose } from './icons';
+import { useModalBehavior } from './useModalBehavior';
 
 interface Props {
   shareId: string;
@@ -10,6 +12,8 @@ interface Props {
 
 /** Scan history and the error list of the current results (FR-UI-20). */
 export function ScanDrawer({ shareId, generation, onClose }: Props) {
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const { onKeyDown } = useModalBehavior(drawerRef, { onClose });
   const [scans, setScans] = useState<ScanRecord[]>([]);
   const [errors, setErrors] = useState<ScanError[]>([]);
   const [errorTotal, setErrorTotal] = useState(0);
@@ -43,11 +47,19 @@ export function ScanDrawer({ shareId, generation, onClose }: Props) {
   }, [shareId, generation]);
 
   return (
-    <aside className="drawer" role="dialog" aria-label="Scan history and errors">
+    <aside
+      className="drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Scan history and errors"
+      ref={drawerRef}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+    >
       <div className="drawer-head">
         <h2>Scan history</h2>
-        <button type="button" onClick={onClose} aria-label="Close">
-          ✕
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <IconClose />
         </button>
       </div>
 

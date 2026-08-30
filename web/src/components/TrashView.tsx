@@ -1,7 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { api, type ShareInfo, type TrashItem } from '../api';
 import { absoluteTime, formatBytes, formatCount, relativeTime } from '../format';
 import { useAsyncData } from '../hooks';
+import { IconClose } from './icons';
+import { useModalBehavior } from './useModalBehavior';
 
 interface Props {
   share: ShareInfo;
@@ -15,10 +17,12 @@ interface Props {
  * when trash mode is on; with direct unlinking there is nothing to list.
  */
 export function TrashView({ share, onClose, onChanged }: Props) {
+  const drawerRef = useRef<HTMLElement | null>(null);
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
+  const { onKeyDown } = useModalBehavior(drawerRef, { onClose, closable: busy === null });
 
   const load = useCallback(async () => (await api.trash(share.id)).items, [share.id]);
   const { data: items, error, loading } = useAsyncData(`trash|${share.id}|${version}`, load);
@@ -55,11 +59,19 @@ export function TrashView({ share, onClose, onChanged }: Props) {
   const total = (items ?? []).reduce((s, i) => s + i.size, 0);
 
   return (
-    <aside className="drawer" role="dialog" aria-label="Trash">
+    <aside
+      className="drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Trash"
+      ref={drawerRef}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+    >
       <div className="drawer-head">
         <h2>Trash · {share.name}</h2>
-        <button type="button" onClick={onClose} aria-label="Close">
-          ✕
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <IconClose />
         </button>
       </div>
 

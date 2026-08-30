@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type Basis, type Node } from '../api';
 import { absoluteTime, formatBytes, formatCount, formatPercent, relativeTime } from '../format';
 import { useAsyncData } from '../hooks';
+import { IconKebab } from './icons';
 
 /** What the results pane is showing. */
 export type ResultsMode =
@@ -18,6 +19,8 @@ interface Props {
   selected: Node | null;
   onSelect: (node: Node) => void;
   onReveal: (node: Node) => void;
+  /** Opens the action menu for a row (kebab button or right-click). */
+  onMenu?: (node: Node, x: number, y: number) => void;
   onClose: () => void;
 }
 
@@ -51,6 +54,7 @@ export function ResultsView({
   selected,
   onSelect,
   onReveal,
+  onMenu,
   onClose,
 }: Props) {
   // The caller remounts this component when `mode` changes (it passes a key
@@ -216,12 +220,20 @@ export function ResultsView({
                     onReveal(n);
                   }
                 }}
+                onContextMenu={
+                  onMenu &&
+                  ((e) => {
+                    e.preventDefault();
+                    onSelect(n);
+                    onMenu(n, e.clientX, e.clientY);
+                  })
+                }
               >
                 <td className="mono wrap">{n.path}</td>
                 <td className="num">{formatBytes(basis === 'allocated' ? n.alloc : n.size)}</td>
                 <td className="num">{formatPercent(n.pct_of_share)}</td>
                 <td title={absoluteTime(n.mtime)}>{relativeTime(n.mtime)}</td>
-                <td>
+                <td className="row-actions">
                   <button
                     type="button"
                     className="link"
@@ -232,6 +244,21 @@ export function ResultsView({
                   >
                     Show in tree
                   </button>
+                  {onMenu && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Actions for ${n.path}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelect(n);
+                        const r = e.currentTarget.getBoundingClientRect();
+                        onMenu(n, r.left, r.bottom + 2);
+                      }}
+                    >
+                      <IconKebab />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
