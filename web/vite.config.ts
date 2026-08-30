@@ -1,11 +1,27 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { writeFileSync } from 'node:fs';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+
+/**
+ * Keeps web/dist/.gitkeep in place after a build. The Go binary embeds the
+ * directory with `go:embed all:dist`, which refuses to compile when the
+ * directory is empty; the tracked .gitkeep is what makes a checkout without
+ * a UI build still compile. emptyOutDir would otherwise delete it.
+ */
+function keepGitkeep(): Plugin {
+  return {
+    name: 'keep-gitkeep',
+    closeBundle() {
+      writeFileSync('dist/.gitkeep', '');
+    },
+  };
+}
 
 // base './' makes asset URLs relative so the same build works under any
 // server.base_path; the app uses hash routing (spec §10.1 FR-UI-03).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), keepGitkeep()],
   base: './',
   build: {
     outDir: 'dist',

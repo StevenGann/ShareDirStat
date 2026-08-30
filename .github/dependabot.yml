@@ -10,6 +10,14 @@ updates:
     schedule: { interval: weekly }
     groups:
       web-deps: { patterns: ["*"] }
+    ignore:
+      # typescript-eslint declares a peer range below TypeScript 7; lift
+      # this once it supports the Go-based compiler.
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
+      # jsdom's engine range and Vite's Node baseline are tied to Node 22.
+      - dependency-name: "@types/node"
+        versions: [">=23.0.0"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
