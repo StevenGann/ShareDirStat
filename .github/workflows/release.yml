@@ -148,7 +148,9 @@ jobs:
           path: sbom.spdx.json
           retention-days: 1
       - name: Scan released image
-        uses: aquasecurity/trivy-action@0.28.0
+        # The action's releases are tagged with a leading "v"; an
+        # unprefixed tag does not resolve and fails the whole job.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: table
