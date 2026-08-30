@@ -108,7 +108,7 @@ func BenchmarkQueries(b *testing.B) {
 	})
 	b.Run("top-100", func(b *testing.B) {
 		for range b.N {
-			if _, ok := g.Top("", 100, false); !ok {
+			if _, ok := g.Top("", 100, false, g.Basis()); !ok {
 				b.Fatal("miss")
 			}
 		}

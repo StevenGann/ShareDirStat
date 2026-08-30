@@ -275,11 +275,42 @@ func (g *Generation) ExtensionsUnder(path string) ([]ExtStat, bool) {
 // walk visits root and every descendant in depth-first order. The callback
 // returns false to skip a directory's children. Caller must hold the lock.
 func (g *Generation) walk(root uint32, fn func(uint32) bool) {
+	// The loop is spelled out rather than delegating to walkUntil: this runs
+	// once per node over the whole arena for ExtensionsUnder, Top and Remove,
+	// and wrapping fn in an adapter closure adds a non-inlinable call to every
+	// one of those visits.
 	stack := []uint32{root}
 	for len(stack) > 0 {
 		idx := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if !fn(idx) {
+			continue
+		}
+		n := &g.nodes[idx]
+		for i := n.FirstChild; i < n.FirstChild+n.ChildCount; i++ {
+			if g.nodes[i].Kind != KindDeleted {
+				stack = append(stack, i)
+			}
+		}
+	}
+}
+
+// walkUntil is walk with early termination. The callback returns
+// (descend, keepGoing): descend=false skips this node's children, while
+// keepGoing=false abandons the traversal entirely. Skipping and stopping are
+// genuinely different — a bounded search needs the latter, and expressing it
+// as the former only prunes one subtree and keeps scanning.
+// Caller must hold the lock.
+func (g *Generation) walkUntil(root uint32, fn func(uint32) (bool, bool)) {
+	stack := []uint32{root}
+	for len(stack) > 0 {
+		idx := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		descend, keepGoing := fn(idx)
+		if !keepGoing {
+			return
+		}
+		if !descend {
 			continue
 		}
 		n := &g.nodes[idx]

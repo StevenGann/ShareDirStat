@@ -47,10 +47,40 @@ export function DeleteDialog({ share, nodes, onDone, onClose }: Props) {
     };
   }, [share.id, paths]);
 
-  // Focus the dialog so Escape works and screen readers announce it.
+  // Focus the dialog so Escape works and screen readers announce it -- but
+  // only when nothing inside it has already claimed focus. React applies
+  // `autoFocus` during commit and this effect runs afterwards, so focusing
+  // unconditionally stole focus back from the typed-confirmation input: the
+  // user was told to type the folder name and their keystrokes went nowhere.
   useEffect(() => {
-    dialogRef.current?.focus();
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (dialog.contains(document.activeElement) && document.activeElement !== dialog) return;
+    dialog.focus();
   }, [phase.step]);
+
+  // A modal that does not trap Tab is only decoratively modal: focus walks out
+  // onto the tree and the toolbar behind the backdrop, where the user can
+  // start a scan or change the basis while a delete confirmation is open.
+  const onKeyDownTrap = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0] as HTMLElement;
+    const last = focusable[focusable.length - 1] as HTMLElement;
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === dialog)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }, []);
 
   const confirm = useCallback(async () => {
     if (phase.step !== 'confirm') return;
@@ -68,12 +98,22 @@ export function DeleteDialog({ share, nodes, onDone, onClose }: Props) {
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape' && phase.step !== 'working') {
       e.preventDefault();
+      // App also listens for Escape on window and would close the results
+      // pane underneath the dialog the user was only trying to dismiss.
+      e.stopPropagation();
       onClose();
+      return;
     }
+    onKeyDownTrap(e);
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && phase.step !== 'working') onClose();
+      }}
+    >
       <div
         className="modal"
         role="dialog"
@@ -143,7 +183,13 @@ function ConfirmBody({
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const needsTyping = preview.name_to_type !== '';
-  const ready = needsTyping ? typed === preview.name_to_type : acknowledged;
+  // Compare in NFC. A folder created on macOS is stored decomposed, while a
+  // keyboard produces the composed form, so a byte-exact comparison would
+  // never match and the folder would be undeletable through the UI. Case and
+  // whitespace are still significant -- that friction is the point.
+  const ready = needsTyping
+    ? typed.normalize('NFC') === preview.name_to_type.normalize('NFC')
+    : acknowledged;
   const missing = preview.targets.filter((t) => !t.exists);
 
   return (
@@ -224,6 +270,9 @@ function ConfirmBody({
           <input
             type="text"
             value={typed}
+            autoCapitalize="off"
+            autoCorrect="off"
+
             autoFocus
             autoComplete="off"
             spellCheck={false}

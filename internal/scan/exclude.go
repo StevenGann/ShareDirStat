@@ -7,8 +7,11 @@ import "strings"
 //
 // Semantics: '*' matches within one path segment, '?' matches one character,
 // '**' matches any number of segments, a trailing '/' restricts the pattern
-// to directories, and a leading '!' negates. When several patterns match the
-// same path, the last one wins.
+// to directories, and a leading '!' negates. A pattern containing no '/' is
+// matched against the basename at any depth ("@eaDir" excludes it wherever it
+// appears); one that does contain a '/' is anchored at the share root, and a
+// leading '/' anchors a single-segment pattern there too. When several
+// patterns match the same path, the last one wins.
 type Matcher struct {
 	pats []pattern
 }
@@ -39,12 +42,20 @@ func NewMatcher(patterns []string) *Matcher {
 			pat.dirOnly = true
 			p = strings.TrimSuffix(p, "/")
 		}
+		anchored := strings.HasPrefix(p, "./") || strings.HasPrefix(p, "/")
 		p = strings.TrimPrefix(p, "./")
 		p = strings.TrimPrefix(p, "/")
 		if p == "" {
 			continue
 		}
 		pat.segs = strings.Split(p, "/")
+		// gitignore's defining rule: a pattern containing no separator is
+		// matched against the basename at every level, not just at the share
+		// root. Without this, the natural spellings ("@eaDir", "*.tmp")
+		// silently match nothing below the top level.
+		if !anchored && len(pat.segs) == 1 {
+			pat.segs = []string{"**", pat.segs[0]}
+		}
 		m.pats = append(m.pats, pat)
 	}
 	return m
@@ -58,7 +69,17 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 	if m.Empty() {
 		return false
 	}
-	segs := strings.Split(relPath, "/")
+	return m.MatchSegments(strings.Split(relPath, "/"), isDir)
+}
+
+// MatchSegments is Match on an already-split path. The crawl calls this once
+// per directory entry, and the parent's segments are the same for all of them,
+// so splitting per entry would re-do that work (and allocate the joined path
+// and the segment slice) for every file on the share.
+func (m *Matcher) MatchSegments(segs []string, isDir bool) bool {
+	if m.Empty() {
+		return false
+	}
 	excluded := false
 	for i := range m.pats {
 		p := &m.pats[i]
@@ -70,6 +91,23 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 		}
 	}
 	return excluded
+}
+
+// splitRel splits a share-relative path into segments, reusing buf. The empty
+// path has no segments, so a root-level entry matches on its name alone.
+func splitRel(buf []string, relPath string) []string {
+	buf = buf[:0]
+	if relPath == "" {
+		return buf
+	}
+	for {
+		i := strings.IndexByte(relPath, '/')
+		if i < 0 {
+			return append(buf, relPath)
+		}
+		buf = append(buf, relPath[:i])
+		relPath = relPath[i+1:]
+	}
 }
 
 // matchSegments matches a compiled pattern against path segments, with '**'

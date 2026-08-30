@@ -23,7 +23,10 @@ scan:
   default_schedule: "0 3 * * *"  # nightly; "" disables scheduled scans
   follow_symlinks: false
   cross_mount_points: false
+  # Merged with each share's own `excludes`, not replaced by them.
+  # A pattern with no "/" matches that basename at any depth (gitignore rules).
   default_excludes:
+    - "**/.sharedirstat-trash"   # keep the trash out of the results it created
     - "**/.snapshot"
     - "**/@eaDir"
     - "**/#recycle"
@@ -47,6 +50,9 @@ operations:
 # Auto-discovery: every directory under `root` becomes a share when the
 # `shares:` list below is empty (or when enabled: true).
 discovery:
+  # null (the default) = discover only when `shares:` is empty.
+  # true = always discover, alongside any explicit shares. false = never.
+  enabled: null
   root: /shares
   allow_delete: false            # discovered shares are read-only unless you opt in
   allow_download: true
@@ -60,6 +66,7 @@ shares:
     concurrency: 16
     schedule: "0 4 * * *"
     excludes: ["**/.cache"]
+    size_basis: apparent         # per-share override of scan.size_basis
   - id: backups
     name: Backups
     path: /shares/backups

@@ -43,11 +43,14 @@ type Options struct {
 
 // Progress is a point-in-time snapshot of a running scan (FR-SCAN-07).
 type Progress struct {
-	Dirs        uint64        `json:"dirs"`
-	Files       uint64        `json:"files"`
-	Bytes       uint64        `json:"bytes"`
-	Errors      uint64        `json:"errors"`
-	Excluded    uint64        `json:"excluded"`
+	Dirs     uint64 `json:"dirs"`
+	Files    uint64 `json:"files"`
+	Bytes    uint64 `json:"bytes"`
+	Errors   uint64 `json:"errors"`
+	Excluded uint64 `json:"excluded"`
+	// Vanished counts entries that existed at readdir but were gone by the
+	// lstat. Normal on a live share, so they are not errors.
+	Vanished    uint64        `json:"vanished"`
 	Pending     int           `json:"pending"`
 	CurrentPath string        `json:"current_path"`
 	Elapsed     time.Duration `json:"-"`
@@ -93,6 +96,7 @@ type counters struct {
 	bytes    atomic.Uint64
 	errs     atomic.Uint64
 	excluded atomic.Uint64
+	vanished atomic.Uint64
 	current  atomic.Pointer[string]
 }
 
@@ -149,9 +153,13 @@ func Run(ctx context.Context, opts Options, meta model.GenerationMeta, ctrl *Con
 		return nil, fmt.Errorf("scan root %s is not a directory", opts.Root)
 	}
 	rootStat, haveRootStat := fromSys(rootFI.Sys())
+	rootStat.Size = rootFI.Size()
+	if !haveRootStat {
+		rootStat.Mtime = rootFI.ModTime().Unix()
+	}
 
 	b := model.NewBuilder(opts.ShareID, opts.Root, opts.Basis, opts.MaxNodes, opts.SizeHint)
-	b.SetRootMeta(entryFromStat(rootFI, rootStat, haveRootStat, model.KindDir))
+	b.SetRootMeta(entryFromStat(filepath.Base(opts.Root), rootStat, rootFI.Mode(), haveRootStat, model.KindDir))
 
 	s := &scanner{
 		opts:    opts,
@@ -160,6 +168,13 @@ func Run(ctx context.Context, opts Options, meta model.GenerationMeta, ctrl *Con
 		rootDev: rootStat.Dev,
 		links:   newInodeSet(),
 		visited: newInodeSet(),
+	}
+	// Every other directory is entered into visited by classify before any of
+	// its descendants are processed; the root is pushed straight onto the
+	// queue and would otherwise be the single node a symlink can re-enter,
+	// double-counting every file directly beneath it.
+	if haveRootStat {
+		s.visited.seen(rootStat.Dev, rootStat.Ino)
 	}
 	if ctrl == nil {
 		ctrl = NewController()
@@ -175,7 +190,11 @@ func Run(ctx context.Context, opts Options, meta model.GenerationMeta, ctrl *Con
 	if ctrl.Paused() {
 		q.setPaused(true)
 	}
-	q.push(dirTask{path: opts.Root, node: b.Root()})
+	// Seed the relative path from RelRoot so that a subtree rescan matches
+	// exclusion patterns against the *share*-relative path, as FR-SCAN-15
+	// requires. Starting at "" would make "Movies/tmp" unmatchable during a
+	// rescan of Movies, and "tmp" wrongly matchable.
+	q.push(dirTask{path: opts.Root, relPath: opts.RelRoot, node: b.Root()})
 
 	start := time.Now()
 	stopWatch := make(chan struct{})
@@ -277,6 +296,7 @@ func (s *scanner) progress(start time.Time, paused bool) Progress {
 		Bytes:       s.counts.bytes.Load(),
 		Errors:      s.counts.errs.Load(),
 		Excluded:    s.counts.excluded.Load(),
+		Vanished:    s.counts.vanished.Load(),
 		Pending:     s.q.pending(),
 		CurrentPath: cur,
 		Elapsed:     elapsed,
@@ -310,44 +330,66 @@ func (s *scanner) processDir(ctx context.Context, t dirTask, entries []model.Ent
 		return entries, scratch
 	}
 	defer func() { _ = f.Close() }()
+	// One descriptor for the whole directory: every entry is stat-ed relative
+	// to it. f stays reachable through the deferred Close for the whole loop,
+	// so the descriptor cannot be finalized underneath us.
+	fd := int(f.Fd())
 
 	entries = entries[:0]
-	var dirNames []string
-	var excluded, bytes uint64
+	// Positions in entries of the subdirectories to descend into. Recording
+	// positions rather than one name per entry means a leaf directory of a
+	// thousand files allocates nothing here at all.
+	var dirPos []int
+	var excluded, bytes, vanished uint64
 	var flags model.Flags
+
+	// The parent's path segments are identical for every entry, so they are
+	// split once here; the last slot is overwritten with each entry's name.
+	var segs []string
+	if !s.matcher.Empty() {
+		segs = append(splitRel(nil, t.relPath), "")
+	}
 
 	for {
 		batch, err := f.ReadDir(readDirBatch)
 		for i := range batch {
 			de := batch[i]
 			name := de.Name()
-			rel := name
-			if t.relPath != "" {
-				rel = t.relPath + "/" + name
+			// Exclusions are matched on the pre-split parent segments plus
+			// this name, so nothing is joined or re-split per entry.
+			if segs != nil {
+				segs[len(segs)-1] = name
+				if s.matcher.MatchSegments(segs, de.IsDir()) {
+					excluded++
+					flags |= model.FlagExcluded
+					continue
+				}
 			}
-			isDir := de.IsDir()
-			if !s.matcher.Empty() && s.matcher.Match(rel, isDir) {
-				excluded++
-				flags |= model.FlagExcluded
-				continue
-			}
-			full := filepath.Join(t.path, name)
-			fi, lerr := os.Lstat(full)
+			st, mode, haveStat, lerr := lstatEntry(fd, t.path, name)
 			if lerr != nil {
-				s.recordError(full, "lstat", lerr)
+				// Entries disappear between readdir and lstat all the time on
+				// a live share (a torrent's incomplete/, a Maildir, a build
+				// cache). Treating that as an error floods the error list and
+				// marks every ancestor partial, hiding real I/O failures.
+				if errors.Is(lerr, fs.ErrNotExist) || errors.Is(lerr, syscall.ESTALE) {
+					vanished++
+					continue
+				}
+				s.recordError(joinPath(t.path, name), "lstat", lerr)
 				flags |= model.FlagPartial
 				continue
 			}
-			e, descend := s.classify(full, fi)
-			if e.Kind != model.KindDir {
+			e, descend := s.classify(fd, t.path, name, st, mode, haveStat)
+			// Hard-link duplicates occupy no additional space and are excluded
+			// from the aggregates at finalize; counting them here makes the
+			// live byte counter climb past the total the scan finally reports.
+			if e.Kind != model.KindDir && !e.Flags.Has(model.FlagHardlinkDup) {
 				bytes += e.Size
 			}
-			entries = append(entries, e)
 			if descend {
-				dirNames = append(dirNames, name)
-			} else {
-				dirNames = append(dirNames, "")
+				dirPos = append(dirPos, len(entries))
 			}
+			entries = append(entries, e)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -371,6 +413,9 @@ func (s *scanner) processDir(ctx context.Context, t dirTask, entries []model.Ent
 		s.builder.AddExcluded(excluded)
 		s.counts.excluded.Add(excluded)
 	}
+	if vanished > 0 {
+		s.counts.vanished.Add(vanished)
+	}
 	if len(entries) == 0 {
 		return entries, scratch
 	}
@@ -392,18 +437,26 @@ func (s *scanner) processDir(ctx context.Context, t dirTask, entries []model.Ent
 	s.counts.files.Add(files)
 	s.counts.bytes.Add(bytes)
 
-	for i, name := range dirNames {
-		if name == "" {
-			continue
-		}
+	for _, p := range dirPos {
+		name := entries[p].Name
 		s.q.push(dirTask{
-			path:    filepath.Join(t.path, name),
+			path:    joinPath(t.path, name),
 			relPath: joinRel(t.relPath, name),
-			node:    idx[i],
+			node:    idx[p],
 			depth:   t.depth + 1,
 		})
 	}
 	return entries, scratch
+}
+
+// joinPath appends a directory entry's name to its parent's absolute path.
+// filepath.Join would re-Clean the whole path on every call; the parent is
+// already clean and absolute, and a dirent name never contains a separator.
+func joinPath(dir, name string) string {
+	if dir == "" || dir == "/" {
+		return "/" + name
+	}
+	return dir + "/" + name
 }
 
 func joinRel(base, name string) string {
@@ -415,13 +468,14 @@ func joinRel(base, name string) string {
 
 // classify turns a stat result into a model entry and reports whether the
 // scanner should descend into it.
-func (s *scanner) classify(path string, fi fs.FileInfo) (model.Entry, bool) {
-	st, haveStat := fromSys(fi.Sys())
-	mode := fi.Mode()
-
+// classify turns one stat-ed directory entry into a model.Entry and reports
+// whether the crawl should descend into it. fd and dir identify the containing
+// directory, so a symlink target can be re-stat-ed without building a path at
+// all; the full path is only assembled on the error branch that reports one.
+func (s *scanner) classify(fd int, dir, name string, st rawStat, mode fs.FileMode, haveStat bool) (model.Entry, bool) {
 	switch {
 	case mode.IsDir():
-		e := entryFromStat(fi, st, haveStat, model.KindDir)
+		e := entryFromStat(name, st, mode, haveStat, model.KindDir)
 		if haveStat && st.Dev != s.rootDev && !s.opts.CrossMountPoints {
 			e.Flags |= model.FlagMountPoint | model.FlagUnscanned
 			e.Alloc = 0
@@ -436,19 +490,18 @@ func (s *scanner) classify(path string, fi fs.FileInfo) (model.Entry, bool) {
 		return e, true
 
 	case mode&fs.ModeSymlink != 0:
-		e := entryFromStat(fi, st, haveStat, model.KindSymlink)
+		e := entryFromStat(name, st, mode, haveStat, model.KindSymlink)
 		if !s.opts.FollowSymlinks {
 			return e, false
 		}
-		target, err := os.Stat(path)
+		tst, tmode, ok, err := statEntry(fd, dir, name)
 		if err != nil {
-			s.recordError(path, "stat", err)
+			s.recordError(joinPath(dir, name), "stat", err)
 			return e, false
 		}
-		if !target.IsDir() {
+		if !tmode.IsDir() {
 			return e, false
 		}
-		tst, ok := fromSys(target.Sys())
 		if !ok || s.visited.seen(tst.Dev, tst.Ino) {
 			e.Flags |= model.FlagUnscanned
 			return e, false
@@ -457,12 +510,10 @@ func (s *scanner) classify(path string, fi fs.FileInfo) (model.Entry, bool) {
 			e.Flags |= model.FlagMountPoint | model.FlagUnscanned
 			return e, false
 		}
-		d := entryFromStat(target, tst, ok, model.KindDir)
-		d.Name = fi.Name()
-		return d, true
+		return entryFromStat(name, tst, tmode, ok, model.KindDir), true
 
 	case mode.IsRegular():
-		e := entryFromStat(fi, st, haveStat, model.KindFile)
+		e := entryFromStat(name, st, mode, haveStat, model.KindFile)
 		if haveStat && st.Nlink > 1 && s.links.seen(st.Dev, st.Ino) {
 			// Second and later links: keep the real size for display but
 			// contribute nothing to aggregates (FR-SCAN-17).
@@ -471,7 +522,7 @@ func (s *scanner) classify(path string, fi fs.FileInfo) (model.Entry, bool) {
 		return e, false
 
 	default:
-		e := entryFromStat(fi, st, haveStat, model.KindOther)
+		e := entryFromStat(name, st, mode, haveStat, model.KindOther)
 		e.Size, e.Alloc = 0, 0
 		return e, false
 	}
@@ -480,28 +531,27 @@ func (s *scanner) classify(path string, fi fs.FileInfo) (model.Entry, bool) {
 // entryFromStat builds a model entry from a stat result. A directory carries
 // only its own inode's allocation; its aggregate sizes come from its children
 // during finalization (FR-SCAN-18).
-func entryFromStat(fi fs.FileInfo, st rawStat, haveStat bool, kind model.Kind) model.Entry {
+func entryFromStat(name string, st rawStat, mode fs.FileMode, haveStat bool, kind model.Kind) model.Entry {
 	e := model.Entry{
-		Name:  fi.Name(),
+		Name:  name,
 		Kind:  kind,
-		Mtime: fi.ModTime().Unix(),
-		Mode:  uint16(fi.Mode().Perm() & 0o777),
+		Mtime: st.Mtime,
+		Mode:  uint16(mode.Perm() & 0o777),
 	}
 	if haveStat {
-		e.Mtime = st.Mtime
 		e.UID, e.GID = st.UID, st.GID
 		e.Alloc = uint64(max(st.Blocks, 0)) * 512
 	}
 	if kind != model.KindDir {
-		e.Size = uint64(max(fi.Size(), 0))
+		e.Size = uint64(max(st.Size, 0))
 	}
-	if fi.Mode()&fs.ModeSetuid != 0 {
+	if mode&fs.ModeSetuid != 0 {
 		e.Mode |= 0o4000
 	}
-	if fi.Mode()&fs.ModeSetgid != 0 {
+	if mode&fs.ModeSetgid != 0 {
 		e.Mode |= 0o2000
 	}
-	if fi.Mode()&fs.ModeSticky != 0 {
+	if mode&fs.ModeSticky != 0 {
 		e.Mode |= 0o1000
 	}
 	return e

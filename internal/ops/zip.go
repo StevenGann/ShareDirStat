@@ -252,11 +252,44 @@ func (m *Manager) WriteZip(ctx context.Context, w io.Writer, shareID string, pla
 }
 
 // entryName maps a share-relative path to its name inside the archive.
+//
+// The names come from ReadDir, not from the request, so CleanRel never saw
+// them: a file on the share genuinely called `..\..\.ssh\authorized_keys` is
+// a single legal Linux filename, but writing it verbatim into a ZIP hands a
+// path-traversal entry ("zip slip") to any extractor that treats a backslash
+// as a separator, and Windows tooling does. Sanitize per segment, on the way
+// out, where the archive's own conventions apply.
 func entryName(prefix, rel string) string {
-	if prefix == "" {
-		return rel
+	name := rel
+	if prefix != "" {
+		name = strings.TrimPrefix(strings.TrimPrefix(rel, prefix), "/")
 	}
-	return strings.TrimPrefix(strings.TrimPrefix(rel, prefix), "/")
+	segs := strings.Split(name, "/")
+	for i, seg := range segs {
+		segs[i] = sanitizeEntrySegment(seg)
+	}
+	return strings.Join(segs, "/")
+}
+
+// sanitizeEntrySegment makes one path segment safe to write as part of a ZIP
+// entry name: no separators of either flavour, no drive letters, and never a
+// bare ".." that an extractor would walk upwards.
+func sanitizeEntrySegment(seg string) string {
+	seg = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\\' || r == '/':
+			return '_'
+		case r == 0 || (r < 0x20 && r != '\t'):
+			return '_'
+		default:
+			return r
+		}
+	}, seg)
+	if seg == ".." {
+		return "__"
+	}
+	// "C:" and friends: a colon in the first segment is read as a drive spec.
+	return strings.ReplaceAll(seg, ":", "_")
 }
 
 // commonParent returns the deepest directory containing every path, so an

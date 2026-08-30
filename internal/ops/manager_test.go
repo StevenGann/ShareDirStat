@@ -854,3 +854,30 @@ func TestTrashDisabled(t *testing.T) {
 		t.Errorf("empty = %v, want ErrTrashDisabled", err)
 	}
 }
+
+// ZIP entry names come from ReadDir, so CleanRel never inspected them. A file
+// whose own name contains a backslash or a ".." is legal on Linux and must not
+// become a traversal entry inside the archive ("zip slip").
+func TestEntryNameSanitisesTraversal(t *testing.T) {
+	cases := map[string]string{
+		`..\..\..\home\victim\.ssh\authorized_keys`: ".._.._.._home_victim_.ssh_authorized_keys",
+		"..":                   "__",
+		"a/../b":               "a/__/b",
+		`C:\Windows\System32`:  "C__Windows_System32",
+		"ordinary name.mkv":    "ordinary name.mkv",
+		"Movies/2019/film.mkv": "Movies/2019/film.mkv",
+		"new\nline":            "new_line",
+	}
+	for in, want := range cases {
+		if got := entryName("", in); got != want {
+			t.Errorf("entryName(%q) = %q, want %q", in, got, want)
+		}
+		if strings.Contains(entryName("", in), `\`) {
+			t.Errorf("entryName(%q) still contains a backslash", in)
+		}
+	}
+	// The prefix strip still works, and still sanitises what survives it.
+	if got := entryName("Movies", `Movies/a\b.mkv`); got != "a_b.mkv" {
+		t.Errorf("prefix strip: got %q", got)
+	}
+}

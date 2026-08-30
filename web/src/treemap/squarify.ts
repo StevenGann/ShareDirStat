@@ -14,19 +14,19 @@ export interface Rect {
   h: number;
 }
 
-const EMPTY: Rect = { x: 0, y: 0, w: 0, h: 0 };
-
 /**
  * Lays out `values` inside `rect`, returning one rectangle per value in the
- * same order. Values are expected to be sorted descending, which is how the
- * API already returns children; unsorted input still tiles correctly but
- * produces worse aspect ratios.
+ * same order. Input need not be sorted: the layout sorts internally and maps
+ * the result back onto the caller's ordering.
  *
  * Zero and negative values collapse to empty rectangles rather than being
  * dropped, so callers can index the result by the original position.
  */
 export function squarify(values: number[], rect: Rect): Rect[] {
-  const out: Rect[] = values.map(() => EMPTY);
+  // A fresh object per entry: sharing one instance makes every zero-sized
+  // result the *same* object, so any caller that ever adjusts a rect in
+  // place (pixel snapping, say) silently corrupts every other empty cell.
+  const out: Rect[] = values.map(() => ({ x: 0, y: 0, w: 0, h: 0 }));
   if (rect.w <= 0 || rect.h <= 0) return out;
 
   // Only positive values take part in the layout.
@@ -36,6 +36,14 @@ export function squarify(values: number[], rect: Rect): Rect[] {
     if (v > 0) live.push(i);
   }
   if (live.length === 0) return out;
+
+  // Squarify only achieves good aspect ratios on descending input. Sorting
+  // here, rather than documenting it as a precondition, means callers cannot
+  // get it wrong -- and they did: the truncated remainder was appended after
+  // the sorted children, and a client-selected basis differs from the one the
+  // server sorted by. `live` holds original indices, so `out` stays in the
+  // caller's ordering regardless.
+  live.sort((a, b) => (values[b] ?? 0) - (values[a] ?? 0));
 
   let total = 0;
   for (const i of live) total += values[i] ?? 0;

@@ -196,7 +196,10 @@ func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	defer s.metrics.DownloadsInFlight.Dec()
 
 	sum, err := s.ops.WriteZip(r.Context(), w, shareID, plan)
-	s.metrics.DownloadBytes.WithLabelValues(shareID, "zip").Add(float64(sum.Bytes))
+	// Not counted here: ops.WriteZip already reports the streamed bytes through
+	// the download hook, which the metrics wiring feeds into this same counter.
+	// Adding them again made download_bytes_total{type="zip"} double what
+	// type="file" reports for the same traffic.
 	if err != nil {
 		// Headers are long gone by now, so the only honest signal left is to
 		// break off the response; the client sees a truncated archive.

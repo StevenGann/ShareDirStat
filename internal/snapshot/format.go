@@ -166,7 +166,7 @@ func u32len(n int) uint32 {
 	if n < 0 {
 		return 0
 	}
-	if n > math.MaxUint32 {
+	if uint64(n) > math.MaxUint32 {
 		return math.MaxUint32
 	}
 	return uint32(n) //nolint:gosec // bounds-checked immediately above
@@ -317,6 +317,14 @@ func (p *payloadReader) str(maxLen uint32) (string, error) {
 // corrupt length field cannot drive a huge allocation.
 const maxStringLen = 1 << 20
 
+// Initial capacities for the two big arrays. Decoding grows from here as
+// bytes are actually read, so a corrupt length allocates no more than the
+// file can back.
+const (
+	initialNodeAlloc = 1 << 16
+	initialNameAlloc = 1 << 20
+)
+
 // readPayload decodes the arrays and verifies the checksum.
 func readPayload(r io.Reader, h Header) (model.Raw, error) {
 	p := &payloadReader{br: bufio.NewReaderSize(r, 256*1024), h: crc32.New(crcTable)}
@@ -332,13 +340,24 @@ func readPayload(r io.Reader, h Header) (model.Raw, error) {
 	if nodeCount != h.Nodes {
 		return raw, fmt.Errorf("%w: header says %d nodes, payload has %d", ErrCorrupt, h.Nodes, nodeCount)
 	}
-	raw.Nodes = make([]model.Node, nodeCount)
+	if nodeCount > model.MaxNodes {
+		return raw, fmt.Errorf("%w: %d nodes exceeds the arena addressing limit", ErrCorrupt, nodeCount)
+	}
+	// Grow as the bytes actually arrive rather than sizing the slice from the
+	// declared count. The count is cross-checked only against a JSON header in
+	// the same untrusted file, and the CRC that would reject a forgery is not
+	// verified until the end -- so a one-line length field could otherwise
+	// drive a multi-gigabyte allocation, or panic makeslice outright, before
+	// anything had a chance to reject the file.
+	raw.Nodes = make([]model.Node, 0, min(nodeCount, initialNodeAlloc))
 	var scratch [NodeRecordSize]byte
-	for i := range raw.Nodes {
+	for i := uint64(0); i < nodeCount; i++ {
 		if err := p.read(scratch[:]); err != nil {
 			return corrupt(fmt.Sprintf("node %d", i), err)
 		}
-		decodeNode(scratch[:], &raw.Nodes[i])
+		var n model.Node
+		decodeNode(scratch[:], &n)
+		raw.Nodes = append(raw.Nodes, n)
 	}
 
 	nameLen, err := p.u64()
@@ -348,14 +367,31 @@ func readPayload(r io.Reader, h Header) (model.Raw, error) {
 	if nameLen != h.NameBytes {
 		return raw, fmt.Errorf("%w: header says %d name bytes, payload has %d", ErrCorrupt, h.NameBytes, nameLen)
 	}
-	raw.Names = make([]byte, nameLen)
-	if err := p.read(raw.Names); err != nil {
-		return corrupt("names", err)
+	if nameLen > model.MaxNameBytes {
+		return raw, fmt.Errorf("%w: %d name bytes exceeds the arena addressing limit", ErrCorrupt, nameLen)
+	}
+	// Same reasoning as the node array: read it in bounded chunks so the
+	// declared length cannot size an allocation on its own.
+	raw.Names = make([]byte, 0, min(nameLen, initialNameAlloc))
+	for remaining := nameLen; remaining > 0; {
+		chunk := min(remaining, initialNameAlloc)
+		buf := make([]byte, chunk)
+		if err := p.read(buf); err != nil {
+			return corrupt("names", err)
+		}
+		raw.Names = append(raw.Names, buf...)
+		remaining -= chunk
 	}
 
 	extCount, err := p.u32()
 	if err != nil {
 		return corrupt("extension count", err)
+	}
+	// Bound it like the top and error lists: an extension table cannot have
+	// more rows than the share has files, and a corrupt length here would
+	// otherwise size an allocation straight from the file.
+	if uint64(extCount) > nodeCount {
+		return raw, fmt.Errorf("%w: extension table longer than the node array", ErrCorrupt)
 	}
 	raw.Exts = make([]model.ExtStat, extCount)
 	for i := range raw.Exts {

@@ -237,14 +237,25 @@ export function fitText(ctx: Ctx2D, text: string, maxWidth: number): string {
   return lo > 0 ? text.slice(0, lo) + ellipsis : '';
 }
 
-/** Collects the ancestor cells of a cell, outermost first. */
+/**
+ * Collects the ancestor cells of a cell, outermost first.
+ *
+ * Containment comes from `parentPath`, not from a prefix test on the key: a
+ * truncated cell's key is `"<parent> truncated"`, which is not a path, so
+ * `startsWith(`${p}/`)` never matched its own parent and hovering a hatched
+ * cell highlighted its grandparent instead.
+ */
 export function ancestorsOf(cells: Cell[], cell: Cell): Cell[] {
-  const path = cell.node?.path ?? cell.key;
-  const out: Cell[] = [];
+  const byPath = new Map<string, Cell>();
   for (const c of cells) {
-    if (c === cell || c.kind !== 'dir' || !c.node) continue;
-    const p = c.node.path;
-    if (p !== '' && path.startsWith(`${p}/`)) out.push(c);
+    if (c.kind === 'dir' && c.node) byPath.set(c.node.path, c);
   }
-  return out;
+  const out: Cell[] = [];
+  for (let p = cell.parentPath; p !== null && p !== ''; ) {
+    const parent = byPath.get(p);
+    if (!parent || parent === cell) break;
+    out.push(parent);
+    p = parent.parentPath;
+  }
+  return out.reverse();
 }

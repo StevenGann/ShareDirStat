@@ -271,7 +271,9 @@ func (g *Generation) Treemap(opts TreemapOptions) (*TreemapNode, int, bool) {
 }
 
 // Top returns the largest files in the share, or beneath path when given.
-func (g *Generation) Top(path string, n int, dirsOnly bool) ([]NodeInfo, bool) {
+// Ordering uses basis, which need not be the generation's own: a client may
+// ask for the largest files on disk from a share configured for apparent size.
+func (g *Generation) Top(path string, n int, dirsOnly bool, basis Basis) ([]NodeInfo, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -282,8 +284,9 @@ func (g *Generation) Top(path string, n int, dirsOnly bool) ([]NodeInfo, bool) {
 	if !ok {
 		return nil, false
 	}
-	// The share-wide file list is precomputed unless a delete invalidated it.
-	if root == 0 && !dirsOnly && g.top != nil {
+	// The share-wide file list is precomputed, but only in the generation's
+	// own basis; another basis has to be ranked from scratch.
+	if root == 0 && !dirsOnly && basis == g.basis && g.top != nil {
 		out := make([]NodeInfo, 0, min(n, len(g.top)))
 		for _, idx := range g.top {
 			if len(out) == n {
@@ -306,8 +309,8 @@ func (g *Generation) Top(path string, n int, dirsOnly bool) ([]NodeInfo, bool) {
 		if dirsOnly != (k == KindDir) {
 			return true
 		}
-		if len(top) < n || g.nodes[idx].Sized(g.basis) > g.nodes[top[len(top)-1]].Sized(g.basis) {
-			top = insertTop(g, top, idx, n)
+		if len(top) < n || g.nodes[idx].Sized(basis) > g.nodes[top[len(top)-1]].Sized(basis) {
+			top = insertTop(g, top, idx, n, basis)
 		}
 		return true
 	})
@@ -356,61 +359,70 @@ func (g *Generation) Search(opts SearchOptions) (SearchResult, bool) {
 	}
 	pattern := strings.ToLower(opts.Query)
 	glob := strings.ContainsAny(pattern, "*?")
+	// "mkv" and ".mkv" mean the same thing to a user, and a UI echoing a
+	// node's own ext back as a filter sends the bare form. Normalize once,
+	// here, rather than per visited node.
+	wantExt := strings.ToLower(strings.TrimPrefix(opts.Ext, "."))
+	needName := pattern != "" || wantExt != ""
 
 	var res SearchResult
 	top := make([]uint32, 0, opts.Limit+1)
 	const deadlineCheckEvery = 4096
 
-	g.walk(root, func(idx uint32) bool {
+	g.walkUntil(root, func(idx uint32) (bool, bool) {
 		if idx == root {
-			return true
+			return true, true
 		}
 		res.Scanned++
 		if res.Scanned%deadlineCheckEvery == 0 && !opts.Deadline.IsZero() && time.Now().After(opts.Deadline) {
 			res.Truncated = true
-			return false
+			return false, false
 		}
 		n := &g.nodes[idx]
 		switch opts.Kind {
 		case "file":
 			if n.Kind == KindDir {
-				return true
+				return true, true
 			}
 		case "dir":
 			if n.Kind != KindDir {
-				return true
+				return true, true
 			}
 		}
 		size := n.Sized(opts.Basis)
 		if size < opts.MinSize || (opts.MaxSize > 0 && size > opts.MaxSize) {
-			return true
+			return true, true
 		}
 		mt := time.Unix(n.Mtime, 0)
 		if !opts.MtimeAfter.IsZero() && mt.Before(opts.MtimeAfter) {
-			return true
+			return true, true
 		}
 		if !opts.MtimeBefore.IsZero() && mt.After(opts.MtimeBefore) {
-			return true
+			return true, true
 		}
-		name := string(g.rawName(idx))
-		lower := strings.ToLower(name)
-		if opts.Ext != "" && extensionOf(lower) != strings.ToLower(opts.Ext) {
-			return true
-		}
-		if pattern != "" {
-			if glob {
-				if !matchGlob(pattern, lower) {
-					return true
+		// Only materialize the name when a name-based filter needs it: the
+		// size/mtime-only case would otherwise allocate twice per node across
+		// the whole arena.
+		if needName {
+			lower := strings.ToLower(string(g.rawName(idx)))
+			if wantExt != "" && extensionOf(lower) != wantExt {
+				return true, true
+			}
+			if pattern != "" {
+				if glob {
+					if !matchGlob(pattern, lower) {
+						return true, true
+					}
+				} else if !strings.Contains(lower, pattern) {
+					return true, true
 				}
-			} else if !strings.Contains(lower, pattern) {
-				return true
 			}
 		}
 		res.Total++
 		if len(top) < opts.Limit || size > g.nodes[top[len(top)-1]].Sized(opts.Basis) {
-			top = insertTop(g, top, idx, opts.Limit)
+			top = insertTop(g, top, idx, opts.Limit, opts.Basis)
 		}
-		return true
+		return true, true
 	})
 	if res.Total > len(top) {
 		res.Truncated = true

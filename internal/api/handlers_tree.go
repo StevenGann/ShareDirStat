@@ -36,6 +36,18 @@ func basisFor(r *http.Request, sh *share.Share) (model.Basis, bool) {
 	return model.ParseBasis(raw)
 }
 
+// basisOrError resolves the basis and answers 400 when the client asked for
+// one that does not exist. Silently falling back would label the response
+// with a basis the numbers were not computed in.
+func basisOrError(w http.ResponseWriter, r *http.Request, sh *share.Share) (model.Basis, bool) {
+	basis, valid := basisFor(r, sh)
+	if !valid {
+		writeError(w, http.StatusBadRequest, "invalid_basis", "basis must be apparent or allocated", nil)
+		return basis, false
+	}
+	return basis, true
+}
+
 // rendererFor builds a renderer bound to this request's basis.
 func (s *Server) rendererFor(b model.Basis, gen *model.Generation) renderer {
 	st := gen.Stats()
@@ -63,9 +75,8 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	basis, valid := basisFor(r, sh)
-	if !valid {
-		writeError(w, http.StatusBadRequest, "invalid_basis", "basis must be apparent or allocated", nil)
+	basis, ok := basisOrError(w, r, sh)
+	if !ok {
 		return
 	}
 	sortField, valid := model.ParseSort(r.URL.Query().Get("sort"))
@@ -112,7 +123,10 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	basis, _ := basisFor(r, sh)
+	basis, ok := basisOrError(w, r, sh)
+	if !ok {
+		return
+	}
 	if notModified(w, r, gen) {
 		return
 	}
@@ -143,7 +157,10 @@ func (s *Server) handleTreemap(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	basis, _ := basisFor(r, sh)
+	basis, ok := basisOrError(w, r, sh)
+	if !ok {
+		return
+	}
 	if notModified(w, r, gen) {
 		return
 	}
@@ -176,7 +193,10 @@ func (s *Server) handleTop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	basis, _ := basisFor(r, sh)
+	basis, ok := basisOrError(w, r, sh)
+	if !ok {
+		return
+	}
 	if notModified(w, r, gen) {
 		return
 	}
@@ -189,7 +209,7 @@ func (s *Server) handleTop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := queryPath(r)
-	list, found := gen.Top(path, clampInt(r, "n", 100, 1, MaxTopN), kind == "dir")
+	list, found := gen.Top(path, clampInt(r, "n", 100, 1, MaxTopN), kind == "dir", basis)
 	if !found {
 		writeError(w, http.StatusNotFound, "path_not_found", "no such path in the current results: "+path, nil)
 		return
@@ -225,7 +245,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	basis, _ := basisFor(r, sh)
+	basis, ok := basisOrError(w, r, sh)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
 	opts := model.SearchOptions{
 		Query:       q.Get("q"),

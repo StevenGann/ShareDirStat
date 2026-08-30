@@ -66,6 +66,11 @@ func TestCleanRel(t *testing.T) {
 		"dots...in.the.name": "dots...in.the.name",
 		"..hidden":           "..hidden",
 		"a/..b/c":            "a/..b/c",
+		// Backslash is an ordinary byte in a Linux filename, not a separator,
+		// so these are single segments and stay inside the share.
+		`a\b`:                        `a\b`,
+		`AC\DC - Back in Black.flac`: `AC\DC - Back in Black.flac`,
+		`..\..\windows`:              `..\..\windows`,
 	}
 	for in, want := range ok {
 		got, err := CleanRel(in)
@@ -82,8 +87,6 @@ func TestCleanRel(t *testing.T) {
 		"../",
 		"a/../b",
 		"with\x00nul",
-		`..\..\windows`,
-		`a\b`,
 	}
 	for _, in := range bad {
 		if got, err := CleanRel(in); err == nil {

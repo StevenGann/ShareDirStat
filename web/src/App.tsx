@@ -290,6 +290,24 @@ export default function App() {
     [refresh],
   );
 
+  /**
+   * Switching shares must clear everything scoped to the old one. Resetting
+   * only the view leaves `selected`/`selection` holding nodes from the
+   * previous share while `current` is the new one, so the detail bar, the ZIP
+   * link and the delete dialog all address the *new* share with the *old*
+   * paths -- and if both shares happen to contain that path, the preview looks
+   * entirely plausible and deletes the wrong file.
+   */
+  const selectShare = useCallback((id: string) => {
+    setView({ share: id, path: '', root: '' });
+    setSelected(null);
+    setSelection([]);
+    setExpanded(new Set(['']));
+    setResults(null);
+    setHighlightExt(null);
+    setDeleting(null);
+  }, []);
+
   const setPref = useCallback(<T,>(key: string, value: T, apply: (v: T) => void) => {
     apply(value);
     store(key, value);
@@ -339,7 +357,7 @@ export default function App() {
         current={current}
         scan={current?.scan ?? null}
         busy={busy}
-        onSelect={(id) => setView({ share: id, path: '', root: '' })}
+        onSelect={selectShare}
         onScan={() => void startScan('')}
         onCancel={() => void cancelScan()}
         onPauseToggle={() => void pauseToggle()}

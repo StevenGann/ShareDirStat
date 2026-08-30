@@ -334,9 +334,13 @@ func (m *Manager) Start(ctx context.Context, shareID, path string, trigger Trigg
 		done:   make(chan struct{}),
 	}
 	m.running[shareID] = rs
+	// Add before releasing the lock: Close takes m.mu, then Waits. Adding
+	// after the unlock races that Wait, which panics with "WaitGroup misuse"
+	// when the counter goes 0->1 with a waiter parked, and otherwise lets the
+	// scan goroutine outlive the shutdown barrier.
+	m.wg.Add(1)
 	m.mu.Unlock()
 
-	m.wg.Add(1)
 	go m.run(scanCtx, sh, rs, absRoot, relRoot)
 	return rs.snapshotStatus(), nil
 }
@@ -729,9 +733,6 @@ func (m *Manager) saveHistory(shareID string) {
 // cancelled scan discards its partial generation, so the previously served
 // results stay intact (NFR-9).
 func (m *Manager) Close(ctx context.Context) {
-	// Any delete made in the last few seconds still owes a snapshot write.
-	m.FlushSnapshots()
-
 	m.mu.Lock()
 	m.closed = true
 	c := m.cron
@@ -750,4 +751,10 @@ func (m *Manager) Close(ctx context.Context) {
 	case <-ctx.Done():
 		m.log.Warn("scans did not stop before the shutdown deadline")
 	}
+
+	// Only now flush. persist() deliberately skips a share whose scan is
+	// running, on the grounds that the scan will write a fresh snapshot when
+	// it finishes -- but a cancelled scan writes nothing, so flushing before
+	// the cancellation above silently dropped any pending delete.
+	m.FlushSnapshots()
 }

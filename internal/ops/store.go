@@ -44,6 +44,12 @@ var (
 // the value is handed to the filesystem at all. os.Root would refuse these
 // too; rejecting here gives a precise error and keeps hostile input out of
 // the audit log's "resolved path" field.
+// Backslash is deliberately *not* rejected: it is an ordinary byte in a Linux
+// filename ("AC\DC - Back in Black.flac"), the scanner indexes such files, and
+// treating it as a separator would make them permanently undeletable and
+// undownloadable. Confinement does not depend on it -- segments are split on
+// "/" alone, ".." is rejected by exact match, and every operation runs under
+// os.Root, which resolves beneath the share root.
 func CleanRel(p string) (string, error) {
 	if strings.ContainsRune(p, 0) {
 		return "", fmt.Errorf("%w: contains a NUL byte", ErrUnsafePath)
@@ -52,12 +58,6 @@ func CleanRel(p string) (string, error) {
 		// A leading separator is tolerated as a typo, an absolute-looking
 		// path with a drive or UNC prefix is not.
 		p = strings.TrimLeft(p, "/")
-	}
-	if strings.Contains(p, `\`) {
-		// Backslash is a legal byte in a Linux filename, but accepting it in
-		// an API path invites Windows-style traversal attempts. The scanner
-		// never produces one in a path parameter.
-		return "", fmt.Errorf("%w: contains a backslash", ErrUnsafePath)
 	}
 	out := make([]string, 0, 8)
 	for _, seg := range strings.Split(p, "/") {

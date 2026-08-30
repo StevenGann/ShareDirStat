@@ -42,7 +42,9 @@ func NewOwnerResolver(userOverrides, groupOverrides map[int]string) *OwnerResolv
 // toUID validates a configured id. Negative or out-of-range values are
 // ignored rather than wrapped into a different user.
 func toUID(id int) (uint32, bool) {
-	if id < 0 || id > math.MaxUint32 {
+	// Compared as uint64: on a 32-bit build `id > math.MaxUint32` does not
+	// compile, since the untyped constant overflows int.
+	if id < 0 || uint64(id) > math.MaxUint32 {
 		return 0, false
 	}
 	return uint32(id), true //nolint:gosec // range-checked above

@@ -67,10 +67,22 @@ function extensionHsl(ext: string, dark: boolean): Hsl {
   };
 }
 
-/** Colour by depth in the tree: an even ramp from the accent hue. */
+/**
+ * Colour by depth in the tree: an even ramp from the accent hue.
+ *
+ * The ramp is longer than the deepest level the server will emit (the default
+ * max_depth is 8, i.e. depths 0..8), so the wrap cannot make the deepest
+ * visible level identical to the root -- which a period of 8 guaranteed.
+ */
+const DEPTH_RAMP = 12;
+
 export function depthColor(depth: number, dark: boolean): string {
-  const step = depth % 8;
-  return hsl({ h: 205 + step * 6, s: dark ? 40 : 48, l: (dark ? 34 : 72) + step * (dark ? 4 : -3) });
+  const step = Math.abs(depth) % DEPTH_RAMP;
+  return hsl({
+    h: 205 + step * 5,
+    s: dark ? 40 : 48,
+    l: (dark ? 34 : 72) + step * (dark ? 3 : -2.5),
+  });
 }
 
 /** The mtime buckets, oldest last, used for colouring and for the legend. */
@@ -87,6 +99,10 @@ const MTIME_HUES = [8, 30, 48, 150, 200, 232];
 
 /** The bucket index for a modification time. */
 export function mtimeBucket(mtimeMs: number, now: number): number {
+  // An unparseable mtime would otherwise fall through every `<` comparison
+  // (they are all false for NaN) and land silently in "older", where it is
+  // indistinguishable from a genuinely ancient file. Be explicit about it.
+  if (!Number.isFinite(mtimeMs)) return MTIME_BUCKETS.length - 1;
   const days = Math.max((now - mtimeMs) / 86_400_000, 0);
   if (days < 7) return 0;
   if (days < 30) return 1;

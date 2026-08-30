@@ -134,12 +134,23 @@ export function Treemap({
     renderTreemap(ctx, cells, renderOptions);
   }, [cells, renderOptions, size.w, size.h]);
 
+  // Sizing the overlay is kept out of the hover effect below. Assigning
+  // canvas.width/height reinitialises the bitmap even when the value is
+  // unchanged (it is the canonical clear idiom), so leaving it in an effect
+  // that depends on `hover` reallocated and zeroed the whole backing store on
+  // every pointermove -- roughly 23 MB per event at 1600x900 on a 2x display.
+  useLayoutEffect(() => {
+    const canvas = overlayRef.current;
+    if (!canvas || size.w <= 0 || size.h <= 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(size.w * dpr);
+    canvas.height = Math.floor(size.h * dpr);
+  }, [size.w, size.h]);
+
   useLayoutEffect(() => {
     const canvas = overlayRef.current;
     if (!canvas || !theme || size.w <= 0 || size.h <= 0) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(size.w * dpr);
-    canvas.height = Math.floor(size.h * dpr);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

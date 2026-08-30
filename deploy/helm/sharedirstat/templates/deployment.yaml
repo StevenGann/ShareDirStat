@@ -63,6 +63,11 @@ spec:
               path: /healthz
               port: http
             periodSeconds: 30
+            # A Pi mid-scan with a multi-hundred-MB heap can miss the default
+            # 1s budget during a GC pause; three misses would restart the pod
+            # and throw away the scan.
+            timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /readyz

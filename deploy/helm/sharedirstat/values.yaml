@@ -24,9 +24,12 @@ securityContext:
   runAsGroup: 1000
   fsGroup: 1000
 
-# Pin to arm64 nodes on a mixed cluster; clear it on a homogeneous one.
-nodeSelector:
-  kubernetes.io/arch: arm64
+# The image is multi-arch (linux/arm64 and linux/amd64), so nothing is pinned
+# by default -- an arm64 selector left an amd64 homelab with a Pod stuck
+# Pending and no error to explain it. On a mixed cluster, pin explicitly:
+#   nodeSelector:
+#     kubernetes.io/arch: arm64
+nodeSelector: {}
 tolerations: []
 affinity: {}
 

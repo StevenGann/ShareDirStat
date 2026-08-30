@@ -559,6 +559,42 @@ func TestHostCheck(t *testing.T) {
 	}
 }
 
+// allowed_hosts is the DNS-rebinding defence, but Docker's HEALTHCHECK, a
+// kubelet probe and a Prometheus scrape all address the container by IP and
+// would be rejected by it. Setting the one hardening option the README leads
+// with must not make the container permanently unhealthy, so the operational
+// endpoints sit outside hostCheck while everything carrying share data stays
+// behind it. Nothing else in the suite can tell the two topologies apart.
+func TestHostCheckGuardsDataButNotProbes(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) {
+		c.Server.AllowedHosts = []string{"sds.lan"}
+	}, nil)
+	h := e.srv.Handler()
+
+	guarded := []string{"/api/v1/shares", "/api/v1/events", "/api/v1/version", "/"}
+	for _, path := range guarded {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "127.0.0.1:8080"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMisdirectedRequest {
+			t.Errorf("%s with a disallowed Host: got %d, want 421", path, rec.Code)
+		}
+	}
+
+	e.srv.SetReady(true)
+	probes := []string{"/healthz", "/readyz", "/metrics"}
+	for _, path := range probes {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "127.0.0.1:8080" // what a kubelet and the HEALTHCHECK send
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s with a pod-IP Host: got %d, want 200", path, rec.Code)
+		}
+	}
+}
+
 func TestCSRF(t *testing.T) {
 	e := newEnv(t, nil, nil)
 	h := e.srv.Handler()

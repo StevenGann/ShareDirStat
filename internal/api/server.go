@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/StevenGann/ShareDirStat/internal/config"
@@ -37,17 +38,21 @@ type Deps struct {
 
 // Server wires configuration, registry, scans and metrics into an http.Handler.
 type Server struct {
-	cfg     *config.Config
-	reg     *share.Registry
-	scans   *scan.Manager
-	ops     *ops.Manager
-	bus     *events.Broker
-	metrics *metrics.Metrics
-	log     *slog.Logger
-	owners  *OwnerResolver
-	ui      fs.FS
-	ready   atomic.Bool
-	handler http.Handler
+	cfg   *config.Config
+	reg   *share.Registry
+	scans *scan.Manager
+	ops   *ops.Manager
+	bus   *events.Broker
+
+	// shutdown is closed by Close to release long-lived streams.
+	shutdown  chan struct{}
+	closeOnce sync.Once
+	metrics   *metrics.Metrics
+	log       *slog.Logger
+	owners    *OwnerResolver
+	ui        fs.FS
+	ready     atomic.Bool
+	handler   http.Handler
 }
 
 // New constructs the server. Deps.UI is the built web UI (a directory
@@ -57,11 +62,21 @@ func New(d Deps) *Server {
 		d.Owners = NewOwnerResolver(nil, nil)
 	}
 	s := &Server{
-		cfg: d.Config, reg: d.Shares, scans: d.Scans, ops: d.Ops, bus: d.Events,
+		shutdown: make(chan struct{}),
+		cfg:      d.Config, reg: d.Shares, scans: d.Scans, ops: d.Ops, bus: d.Events,
 		metrics: d.Metrics, log: d.Log, owners: d.Owners, ui: d.UI,
 	}
 	s.handler = s.build()
 	return s
+}
+
+// Close ends every open event stream. http.Server.Shutdown waits for
+// connections to fall idle and never cancels request contexts, so an SSE
+// stream -- which is deliberately never idle -- would otherwise keep the
+// server alive until the shutdown deadline expires. Safe to call more than
+// once.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() { close(s.shutdown) })
 }
 
 // SetReady flips the readiness probe.
@@ -103,18 +118,25 @@ func (s *Server) build() http.Handler {
 	api.HandleFunc("GET /api/v1/config", s.handleConfig)
 	api.HandleFunc("/api/", s.handleAPINotFound)
 
-	inner := http.NewServeMux()
-	inner.HandleFunc("GET /healthz", s.handleHealthz)
-	inner.HandleFunc("GET /readyz", s.handleReadyz)
-	inner.Handle("GET /metrics", s.metrics.Handler())
-	inner.Handle("/api/", s.csrf(api))
-	inner.Handle("/", spaHandler(s.ui))
+	guarded := http.NewServeMux()
+	guarded.Handle("/api/", s.csrf(api))
+	guarded.Handle("/", spaHandler(s.ui))
 
-	var h http.Handler = inner
+	// Operational endpoints sit outside hostCheck. Docker's HEALTHCHECK, a
+	// kubelet probe and a Prometheus scrape all address the container by IP,
+	// so allowed_hosts would reject every one of them (FR-SEC-01 exists to
+	// stop a browser reading share data, and none of these is a browser).
+	// They expose no file names or sizes beyond aggregate counters.
+	root := http.NewServeMux()
+	root.HandleFunc("GET /healthz", s.handleHealthz)
+	root.HandleFunc("GET /readyz", s.handleReadyz)
+	root.Handle("GET /metrics", s.metrics.Handler())
+	root.Handle("/", s.hostCheck(guarded))
+
+	var h http.Handler = root
 	h = s.instrument(h)
-	h = s.securityHeaders(h)
-	h = s.hostCheck(h)
 	h = s.basePath(h)
+	h = s.securityHeaders(h)
 	h = s.requestLog(h)
 	h = s.recoverPanic(h)
 	return h

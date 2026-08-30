@@ -1,5 +1,6 @@
 # build outputs
 /bin/
+/sharedirstat
 /dist/
 /web/dist/*
 !/web/dist/.gitkeep
