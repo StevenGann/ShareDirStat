@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sharedirstat
+  labels:
+    release: kube-prometheus-stack   # match your Prometheus's serviceMonitorSelector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sharedirstat
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 60s

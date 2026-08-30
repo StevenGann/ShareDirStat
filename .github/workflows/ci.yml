@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/sharedirstat
+
+jobs:
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify go.mod is tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+      - name: Test (race, coverage)
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
+      - name: Cross-compile
+        run: |
+          set -e
+          for arch in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o bin/sharedirstat-linux-$arch ./cmd/sharedirstat
+          done
+      - name: Smoke test (amd64)
+        run: ./hack/smoke.sh bin/sharedirstat-linux-amd64
+
+  smoke-arm64:
+    name: Smoke test (arm64)
+    # Native arm64 hosted runner (public repos); falls back gracefully if unavailable.
+    runs-on: ubuntu-24.04-arm
+    needs: go
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -count=1 ./...
+      - run: CGO_ENABLED=0 go build -trimpath -o bin/sharedirstat ./cmd/sharedirstat
+      - run: ./hack/smoke.sh bin/sharedirstat
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Lint
+        run: |
+          helm lint deploy/helm/sharedirstat
+          helm lint deploy/helm/sharedirstat --values deploy/helm/sharedirstat/ci-values.yaml
+      - name: Render and validate the generated application config
+        run: |
+          set -e
+          helm template sds deploy/helm/sharedirstat --values deploy/helm/sharedirstat/ci-values.yaml > rendered.yaml
+          # The ConfigMap must produce a config the binary accepts. Extract it
+          # and run check-config against it with the share paths stubbed.
+          python3 - <<'PY'
+          import yaml
+          docs = list(yaml.safe_load_all(open("rendered.yaml")))
+          cm = next(d for d in docs if d and d.get("kind") == "ConfigMap")
+          open("rendered-config.yaml", "w").write(cm["data"]["config.yaml"])
+          PY
+          mkdir -p /tmp/shares/media /tmp/shares/backups
+          sed -i 's|/shares/|/tmp/shares/|' rendered-config.yaml
+          go run ./cmd/sharedirstat check-config --config rendered-config.yaml --data-dir /tmp/sds-data >/dev/null
+      - name: Package
+        run: helm package deploy/helm/sharedirstat --destination dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: dist/*.tgz
+          retention-days: 7
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: [web, go]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=ref,event=pr
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64,linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}-${{ github.sha }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan image for vulnerabilities
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true

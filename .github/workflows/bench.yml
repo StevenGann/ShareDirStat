@@ -1,0 +1,49 @@
+name: Benchmark
+
+# Nightly performance regression check (specification §15.4). Measures the
+# scan rate, per-node memory and query latency on a synthetic tree and fails
+# if any number falls outside its budget.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/model/**"
+      - "internal/scan/**"
+      - "internal/snapshot/**"
+      - "hack/bench.sh"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Bench (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Memory per node and query latency
+        run: |
+          go test -run TestMemoryPerNode -v ./internal/model/ | tee bench-model.txt
+          go test -run XXX -bench BenchmarkQueries -benchtime 50x ./internal/model/ | tee -a bench-model.txt
+      - name: Scan throughput
+        run: ./hack/bench.sh 500000 | tee bench-scan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.arch }}
+          path: bench-*.txt
+          retention-days: 90

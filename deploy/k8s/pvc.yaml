@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sharedirstat-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: local-path   # k3s default; use an SSD-backed class, not SD card
+  resources:
+    requests:
+      storage: 1Gi

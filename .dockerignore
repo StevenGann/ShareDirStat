@@ -1,0 +1,12 @@
+.git
+.github
+web/node_modules
+web/dist
+bin
+dist
+*.md
+!README.md
+deploy
+docs
+.golangci.yml
+.editorconfig

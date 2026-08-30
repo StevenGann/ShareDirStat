@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sharedirstat.fullname" . }}
+  labels:
+    {{- include "sharedirstat.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- /* The free-form application config first, then the shares derived from .Values.shares. */}}
+    {{- toYaml .Values.config | nindent 4 }}
+    {{- if .Values.shares }}
+    shares:
+    {{- range .Values.shares }}
+      - id: {{ include "sharedirstat.shareId" .name | quote }}
+        name: {{ .displayName | default .name | quote }}
+        path: /shares/{{ .name }}
+        allow_delete: {{ .allowDelete | default false }}
+        allow_download: {{ if hasKey . "allowDownload" }}{{ .allowDownload }}{{ else }}true{{ end }}
+        {{- with .concurrency }}
+        concurrency: {{ . }}
+        {{- end }}
+        {{- if hasKey . "schedule" }}
+        schedule: {{ .schedule | quote }}
+        {{- end }}
+        {{- with .excludes }}
+        excludes:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .sizeBasis }}
+        size_basis: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    discovery:
+      root: /shares
+    {{- end }}

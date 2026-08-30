@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sharedirstat
+  labels:
+    app.kubernetes.io/name: sharedirstat
+spec:
+  selector:
+    app.kubernetes.io/name: sharedirstat
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

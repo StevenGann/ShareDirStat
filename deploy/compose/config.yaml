@@ -1,0 +1,17 @@
+# Minimal configuration for the Compose reference deployment.
+server:
+  allowed_hosts: []            # set this! e.g. ["sharedirstat.lan"]
+log:
+  format: json
+scan:
+  default_concurrency: 8
+  default_schedule: "0 3 * * *"
+shares:
+  - id: media
+    name: Media
+    path: /shares/media
+    allow_delete: true
+  - id: backups
+    name: Backups
+    path: /shares/backups
+    allow_delete: false

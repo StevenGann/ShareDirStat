@@ -1,0 +1,13 @@
+apiVersion: v2
+name: sharedirstat
+description: WinDirStat for your homelab — disk usage analysis for mounted shares, with delete and download.
+type: application
+version: 0.1.0
+appVersion: "0.4.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/StevenGann/ShareDirStat
+sources:
+  - https://github.com/StevenGann/ShareDirStat
+keywords: [disk-usage, storage, nas, treemap, windirstat]
+maintainers:
+  - name: Steven Gann

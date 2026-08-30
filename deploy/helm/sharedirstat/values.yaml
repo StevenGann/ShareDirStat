@@ -1,0 +1,122 @@
+# ShareDirStat Helm values. Every key is documented; see the specification
+# (docs/SPECIFICATION.md §5 and §14) for what the application options mean.
+
+image:
+  repository: ghcr.io/stevengann/sharedirstat
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The application keeps its state in memory and on one RWO volume: run one
+# replica, always. This is not a knob.
+strategy:
+  type: Recreate
+
+# The identity the container runs as. Set it to the UID/GID that owns the
+# share data, or deletes fail with "permission denied". There is no root
+# entrypoint that rewrites ownership.
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Pin to arm64 nodes on a mixed cluster; clear it on a homogeneous one.
+nodeSelector:
+  kubernetes.io/arch: arm64
+tolerations: []
+affinity: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    # Rule of thumb (NFR-3): nodes × 100 B × 2.2 (scan peak) + 100 Mi.
+    # 5 M nodes ≈ 1.2 Gi; 10 M ≈ 2.3 Gi.
+    memory: 1Gi
+
+# Application configuration, rendered into /config/config.yaml verbatim.
+# Shares listed here must have matching entries under `shares` below so the
+# volumes are mounted.
+config:
+  server:
+    allowed_hosts: []              # e.g. ["sharedirstat.home.arpa"] — recommended
+  log:
+    level: info
+    format: json
+  scan:
+    on_startup: if-missing
+    default_concurrency: 8         # 8–32 for NFS/SMB, 2–4 for SSD
+    default_schedule: "0 3 * * *"
+  operations:
+    readonly: false
+    delete:
+      confirm_mode: name
+      trash:
+        enabled: false
+        retention: 168h
+
+# Storage locations. Each entry becomes a volume, a mount at
+# /shares/<name>, and a `shares:` entry in the configuration.
+#
+# Exactly one of `nfs`, `hostPath` or `persistentVolumeClaim` per share.
+shares: []
+#  - name: media
+#    displayName: Media
+#    allowDelete: true
+#    readOnly: false               # a read-only mount makes delete impossible regardless of allowDelete
+#    concurrency: 16
+#    schedule: "0 4 * * *"
+#    excludes: ["**/.cache"]
+#    nfs:
+#      server: nas.home.arpa
+#      path: /volume1/media
+#  - name: backups
+#    displayName: Backups
+#    allowDelete: false
+#    readOnly: true
+#    hostPath:
+#      path: /mnt/backups
+#  - name: photos
+#    persistentVolumeClaim:
+#      claimName: photos-pvc
+
+# Persistent data: snapshots, scan history, audit log. Small — snapshots are
+# roughly 8 bytes per file scanned. Put it on an SSD-backed class.
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  existingClaim: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+# ShareDirStat has no authentication. Attach the cluster's auth here.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # traefik.ingress.kubernetes.io/router.middlewares: sharedirstat-auth@kubernetescrd
+  hosts:
+    - host: sharedirstat.home.arpa
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  labels: {}
+
+# Extra environment variables (SDS_* overrides work here).
+env: []
+podAnnotations: {}
+podLabels: {}

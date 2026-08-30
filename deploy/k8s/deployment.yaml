@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sharedirstat
+  labels:
+    app.kubernetes.io/name: sharedirstat
+spec:
+  replicas: 1                     # single writer; never scale this up
+  strategy:
+    type: Recreate                # the data PVC is RWO
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sharedirstat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sharedirstat
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000           # must match the UID that owns the share data
+        runAsGroup: 1000
+        fsGroup: 1000             # for the data PVC
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: sharedirstat
+          image: ghcr.io/stevengann/sharedirstat:edge
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TZ
+              value: UTC
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              # Rule of thumb (NFR-3): nodes × 100 B × 2.2 (scan peak) + 100 Mi.
+              # 5 M nodes ≈ 1.2 Gi.
+              memory: 1Gi
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          startupProbe:
+            httpGet: { path: /readyz, port: http }
+            failureThreshold: 30   # snapshots for 10 M nodes may take a while to load (NFR-7)
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: media
+              mountPath: /shares/media
+            - name: backups
+              mountPath: /shares/backups
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: sharedirstat-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: sharedirstat-data
+        - name: tmp
+          emptyDir: {}
+        # Shares: pick one style per share.
+        - name: media
+          nfs:
+            server: nas.home.arpa
+            path: /volume1/media
+        - name: backups
+          hostPath:
+            path: /mnt/backups
+            type: Directory

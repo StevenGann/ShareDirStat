@@ -1,0 +1,28 @@
+ShareDirStat is starting.
+
+{{- if not .Values.shares }}
+
+  No shares are configured. Add entries under `shares:` in your values so the
+  storage is mounted; until then the UI shows "No shares configured".
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+  URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}
+{{- else }}
+
+  The service is not exposed outside the cluster. To try it locally:
+
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "sharedirstat.fullname" . }} 8080:{{ .Values.service.port }}
+
+  then open http://localhost:8080
+{{- end }}
+
+  ShareDirStat has NO authentication of its own. Put it behind the auth
+  middleware of your ingress before exposing it beyond a trusted network.
+
+{{- if not .Values.config.server.allowed_hosts }}
+
+  Tip: set config.server.allowed_hosts to the hostnames you use, which
+  protects against DNS rebinding.
+{{- end }}

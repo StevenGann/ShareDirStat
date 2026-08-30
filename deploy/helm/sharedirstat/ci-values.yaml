@@ -1,0 +1,28 @@
+# Values used by `helm lint --values` and the chart tests: a realistic
+# deployment with one NFS share and one read-only hostPath share.
+shares:
+  - name: media
+    displayName: Media
+    allowDelete: true
+    concurrency: 16
+    schedule: "0 4 * * *"
+    excludes: ["**/.cache"]
+    nfs:
+      server: nas.home.arpa
+      path: /volume1/media
+  - name: backups
+    allowDelete: false
+    readOnly: true
+    hostPath:
+      path: /mnt/backups
+config:
+  server:
+    allowed_hosts: ["sharedirstat.home.arpa"]
+  operations:
+    delete:
+      trash:
+        enabled: true
+ingress:
+  enabled: true
+serviceMonitor:
+  enabled: true

@@ -1,0 +1,75 @@
+# ShareDirStat configuration — every key is optional; see docs/SPECIFICATION.md §5.
+# Environment overrides: SDS_<SECTION>__<KEY>, e.g. SDS_SERVER__LISTEN=":9000"
+
+server:
+  listen: ":8080"
+  base_path: "/"                 # e.g. "/sharedirstat" when served under a sub-path
+  allowed_hosts: []              # RECOMMENDED: ["sharedirstat.lan", "192.168.1.50"] (DNS-rebinding defence)
+  trust_proxy_headers: false     # honour X-Forwarded-Host for Origin checks when behind a proxy
+  read_timeout: 30s
+  shutdown_timeout: 20s
+
+data_dir: /data                  # snapshots, audit log, state — put this on SSD, not an SD card
+snapshot_debounce: 30s           # after deletes, rewrite the snapshot at most this often
+
+log:
+  level: info                    # debug | info | warn | error
+  format: json                   # json | text
+
+scan:
+  on_startup: if-missing         # never | if-missing | always
+  max_concurrent_shares: 2
+  default_concurrency: 4         # per-share workers; 8–32 for NFS/SMB, 1–2 for spinning disks
+  default_schedule: "0 3 * * *"  # nightly; "" disables scheduled scans
+  follow_symlinks: false
+  cross_mount_points: false
+  default_excludes:
+    - "**/.snapshot"
+    - "**/@eaDir"
+    - "**/#recycle"
+    - "**/.Trash-*"
+    - "**/lost+found"
+  size_basis: apparent           # apparent | allocated
+  max_nodes_per_share: 20000000
+
+operations:
+  readonly: false                # true disables delete everywhere
+  delete:
+    confirm_mode: name           # simple | name
+    trash:
+      enabled: false
+      retention: 168h
+  download:
+    zip_enabled: true
+    zip_max_bytes: 0             # 0 = unlimited; accepts "50GiB"
+    zip_max_entries: 0
+
+# Auto-discovery: every directory under `root` becomes a share when the
+# `shares:` list below is empty (or when enabled: true).
+discovery:
+  root: /shares
+  allow_delete: false            # discovered shares are read-only unless you opt in
+  allow_download: true
+
+shares:
+  - id: media
+    name: Media
+    path: /shares/media
+    allow_delete: true
+    allow_download: true
+    concurrency: 16
+    schedule: "0 4 * * *"
+    excludes: ["**/.cache"]
+  - id: backups
+    name: Backups
+    path: /shares/backups
+    allow_delete: false
+
+ui:
+  default_share: media
+  columns: [name, size, pct, files, dirs, mtime, owner]
+  owner_names: {}                # {1000: steven}
+  group_names: {}
+  treemap:
+    color_scheme: extension      # extension | depth | mtime
+    cushion: true

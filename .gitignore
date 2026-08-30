@@ -1,0 +1,21 @@
+# build outputs
+/bin/
+/dist/
+/web/dist/*
+!/web/dist/.gitkeep
+/web/node_modules/
+/web/coverage/
+coverage.out
+*.test
+*.prof
+
+# local data
+/data/
+/config.yaml
+*.sds
+
+# editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

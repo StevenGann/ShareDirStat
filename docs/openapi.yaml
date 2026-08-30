@@ -1,0 +1,1035 @@
+openapi: 3.1.0
+info:
+  title: ShareDirStat API
+  version: "1"
+  summary: Disk usage analysis for mounted shares, with delete and download.
+  description: |
+    The JSON API behind the ShareDirStat web UI. Every endpoint is also
+    intended for scripts.
+
+    **No authentication.** Access control is the job of the surrounding
+    infrastructure (reverse proxy, VPN, ingress middleware).
+
+    **Mutating requests** (`POST`) must carry the header
+    `X-Requested-With: ShareDirStat` and a JSON body. Cross-origin browser
+    requests are refused: no CORS headers are ever emitted, and a
+    `Sec-Fetch-Site` other than `same-origin`/`none` is rejected.
+
+    **Paths** are share-relative, `/`-separated, without a leading slash; the
+    empty string is the share root. File names on Linux are bytes, not text:
+    a name that is not valid UTF-8 is returned with replacement characters in
+    `name` and its raw bytes base64-encoded in `name_b64`.
+
+    **Sizes** are bytes. Each node carries both `size` (apparent, `st_size`)
+    and `alloc` (allocated, `st_blocks * 512`); the `basis` query parameter
+    selects which one governs sorting and percentages.
+
+    **Caching.** Tree, treemap, top, extension and search responses carry an
+    `ETag` derived from the share's current generation and mutation counter;
+    `If-None-Match` returns `304`.
+  license:
+    name: MIT
+    url: https://github.com/StevenGann/ShareDirStat/blob/main/LICENSE
+
+servers:
+  - url: /api/v1
+    description: Relative to the server's base path.
+
+tags:
+  - name: shares
+  - name: browse
+  - name: scans
+  - name: files
+    description: Delete, download, trash.
+  - name: system
+
+paths:
+  /shares:
+    get:
+      tags: [shares]
+      summary: List shares
+      operationId: listShares
+      responses:
+        "200":
+          description: Every configured share with its state and live scan status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shares:
+                    type: array
+                    items: { $ref: "#/components/schemas/Share" }
+
+  /shares/{id}:
+    get:
+      tags: [shares]
+      summary: One share
+      operationId: getShare
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      responses:
+        "200":
+          description: The share.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Share" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /shares/{id}/tree:
+    get:
+      tags: [browse]
+      summary: List a directory
+      description: |
+        The node at `path` with one page of its children. Children are sorted
+        by `sort`/`order`; the default (size, descending) is served straight
+        from the arena without sorting.
+      operationId: tree
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+        - { $ref: "#/components/parameters/basis" }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [size, name, mtime, files], default: size }
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+        - name: depth
+          in: query
+          description: Levels of children to include; deeper levels carry `children_list`.
+          schema: { type: integer, minimum: 1, maximum: 3, default: 1 }
+      responses:
+        "200":
+          description: The listing.
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TreeResponse" }
+        "304": { description: Not modified. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/node:
+    get:
+      tags: [browse]
+      summary: One node with its breadcrumb
+      operationId: node
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+        - { $ref: "#/components/parameters/basis" }
+      responses:
+        "200":
+          description: The node and its ancestors, root first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share: { type: string }
+                  generation: { type: string }
+                  basis: { $ref: "#/components/schemas/Basis" }
+                  node: { $ref: "#/components/schemas/Node" }
+                  ancestors:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/treemap:
+    get:
+      tags: [browse]
+      summary: Pruned subtree for treemap rendering
+      description: |
+        The subtree at `path`, pruned so that no more than `max_nodes` nodes
+        are emitted, none deeper than `max_depth`, and none smaller than
+        `min_fraction` of the root. Every directory whose children were
+        pruned carries a `truncated` summary of what was left out, so the
+        drawn areas always add up to the parent.
+      operationId: treemap
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+        - { $ref: "#/components/parameters/basis" }
+        - name: min_fraction
+          in: query
+          schema: { type: number, minimum: 0, maximum: 1, default: 0.0005 }
+        - name: max_nodes
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50000, default: 10000 }
+        - name: max_depth
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 64, default: 8 }
+      responses:
+        "200":
+          description: The pruned tree.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share: { type: string }
+                  generation: { type: string }
+                  basis: { $ref: "#/components/schemas/Basis" }
+                  root: { $ref: "#/components/schemas/TreemapNode" }
+                  nodes: { type: integer, description: Nodes emitted. }
+                  min_fraction: { type: number }
+                  max_depth: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/top:
+    get:
+      tags: [browse]
+      summary: Largest files or folders
+      operationId: top
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+        - { $ref: "#/components/parameters/basis" }
+        - name: n
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: kind
+          in: query
+          schema: { type: string, enum: [file, dir], default: file }
+      responses:
+        "200":
+          description: Largest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/extensions:
+    get:
+      tags: [browse]
+      summary: Space by file extension
+      operationId: extensions
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+      responses:
+        "200":
+          description: Extensions, largest first. `ext` is empty for files with none.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extensions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ext: { type: string }
+                        files: { type: integer }
+                        size: { type: integer }
+                        alloc: { type: integer }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/search:
+    get:
+      tags: [browse]
+      summary: Search by name and attributes
+      description: |
+        A linear scan over the in-memory tree, bounded to two seconds. `q`
+        matches case-insensitively as a substring, or as a glob when it
+        contains `*` or `?`. Results are the largest matches; `truncated` is
+        set when either bound cut the search short.
+      operationId: search
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+        - { $ref: "#/components/parameters/basis" }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [file, dir] } }
+        - { name: ext, in: query, schema: { type: string } }
+        - { name: min_size, in: query, schema: { type: integer } }
+        - { name: max_size, in: query, schema: { type: integer } }
+        - { name: mtime_after, in: query, schema: { type: string, format: date-time } }
+        - { name: mtime_before, in: query, schema: { type: string, format: date-time } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        "200":
+          description: Matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+                  total: { type: integer }
+                  truncated: { type: boolean }
+                  scanned: { type: integer }
+        "409": { $ref: "#/components/responses/NotScanned" }
+
+  /shares/{id}/errors:
+    get:
+      tags: [scans]
+      summary: Paths the last scan could not read
+      operationId: scanErrors
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 5000 } }
+      responses:
+        "200":
+          description: Errors, with `dropped` counting any beyond the 10 000 retained.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        op: { type: string }
+                        errno: { type: string }
+                        message: { type: string }
+                  total: { type: integer }
+                  dropped: { type: integer }
+
+  /shares/{id}/scans:
+    get:
+      tags: [scans]
+      summary: Scan history
+      operationId: scanHistory
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      responses:
+        "200":
+          description: Past scans newest first, plus the running one if any.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scans:
+                    type: array
+                    items: { $ref: "#/components/schemas/ScanRecord" }
+                  running:
+                    oneOf:
+                      - { $ref: "#/components/schemas/ScanStatus" }
+                      - { type: "null" }
+
+  /shares/{id}/scan:
+    post:
+      tags: [scans]
+      summary: Start a scan
+      description: |
+        With an empty or absent `path`, scans the whole share into a fresh
+        result set; the previous results stay served until it completes. With
+        a `path`, rescans only that subtree and splices it into the current
+        results.
+      operationId: startScan
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string, default: "" }
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanStatus" }
+        "403": { $ref: "#/components/responses/CSRF" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: A scan is already running, or the share is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /shares/{id}/scan/{scanId}/cancel:
+    post:
+      tags: [scans]
+      summary: Cancel a running scan
+      description: The partial results are discarded; the previous results stay intact.
+      operationId: cancelScan
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/scanId" }
+      responses:
+        "202": { description: Cancellation requested. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /shares/{id}/scan/{scanId}/pause:
+    post:
+      tags: [scans]
+      summary: Pause a running scan
+      operationId: pauseScan
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/scanId" }
+      responses:
+        "202": { description: Paused; in-flight directories finish first. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /shares/{id}/scan/{scanId}/resume:
+    post:
+      tags: [scans]
+      summary: Resume a paused scan
+      operationId: resumeScan
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/scanId" }
+      responses:
+        "202": { description: Resumed. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /scans:
+    get:
+      tags: [scans]
+      summary: Running scans
+      operationId: runningScans
+      responses:
+        "200":
+          description: Every running or queued scan.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scans:
+                    type: array
+                    items: { $ref: "#/components/schemas/ScanStatus" }
+
+  /shares/{id}/download:
+    get:
+      tags: [files]
+      summary: Download one file
+      description: |
+        Streams a regular file with `Content-Disposition: attachment`. Range
+        requests are honoured (`206`), so a large download can be resumed.
+        Media types a browser might execute (`text/html`, `image/svg+xml`,
+        JavaScript, XML) are served as `application/octet-stream`.
+
+        This endpoint reads the filesystem directly, so a file created after
+        the last scan is still downloadable.
+      operationId: download
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - { $ref: "#/components/parameters/path" }
+      responses:
+        "200": { description: The file. }
+        "206": { description: The requested range. }
+        "400":
+          description: Not a regular file, the share root, or an unsafe path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { description: Downloading is not enabled for this share. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /shares/{id}/download/zip:
+    get:
+      tags: [files]
+      summary: Download folders or a selection as a ZIP
+      description: |
+        Streams a ZIP64 archive of one or more paths. Entries are stored, not
+        compressed. Symlinks, special files and anything unreadable are
+        skipped and listed in a `_SKIPPED.txt` member at the end.
+
+        The archive is produced as it is sent, so there is no
+        `Content-Length` and the response cannot be resumed. Limits from
+        `operations.download.zip_max_bytes` / `zip_max_entries` are checked
+        against the scan results before the first byte, returning `413`.
+      operationId: downloadZip
+      parameters:
+        - { $ref: "#/components/parameters/shareId" }
+        - name: path
+          in: query
+          description: Repeat for several paths.
+          required: true
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: The archive.
+          content:
+            application/zip: {}
+        "403": { description: Downloading or ZIP is not enabled. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: The selection exceeds the configured limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      tags: [files]
+      summary: Download a selection as a ZIP (JSON body)
+      operationId: downloadZipPost
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                paths: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: The archive.
+          content:
+            application/zip: {}
+        "403": { $ref: "#/components/responses/CSRF" }
+        "413": { description: The selection exceeds the configured limit. }
+
+  /shares/{id}/delete/preview:
+    post:
+      tags: [files]
+      summary: What a delete would remove
+      description: |
+        Resolves the paths against the scan results and the filesystem,
+        reports sizes, counts and warnings, and issues a confirmation token.
+        The token is single-use, expires after five minutes, and is bound to
+        exactly this set of paths.
+      operationId: deletePreview
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                paths: { type: array, items: { type: string }, maxItems: 1000 }
+      responses:
+        "200":
+          description: The preview.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletePreview" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: Deleting is disabled (server read-only, share opt-out, or mount read-only), or CSRF.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /shares/{id}/delete:
+    post:
+      tags: [files]
+      summary: Delete
+      description: |
+        Removes the paths after validating the confirmation token from the
+        preview. Directories are removed recursively, depth first, with
+        every failure reported individually. On success the in-memory
+        results are updated at once; a partial failure queues a rescan of
+        the affected folder. Every attempt is written to the audit log.
+      operationId: delete
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths, confirm]
+              properties:
+                paths: { type: array, items: { type: string } }
+                confirm: { type: string }
+      responses:
+        "200":
+          description: Per-path outcomes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeleteResult" }
+        "403":
+          description: Bad or expired token (`confirmation_required`), deleting disabled, or CSRF.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A subtree rescan overlaps the paths, or the mount is not writable.
+        "429":
+          description: Another delete is running on this share.
+          headers:
+            Retry-After: { schema: { type: integer } }
+
+  /shares/{id}/trash:
+    get:
+      tags: [files]
+      summary: Items in the trash
+      operationId: listTrash
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      responses:
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/TrashItem" }
+        "403": { description: Trash mode is not enabled. }
+
+  /shares/{id}/trash/restore:
+    post:
+      tags: [files]
+      summary: Restore an item from the trash
+      description: Moves the item back to its original location and queues a rescan of that folder.
+      operationId: restoreTrash
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: The item's `trash_path`. }
+      responses:
+        "200":
+          description: Restored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrashItem" }
+        "409": { description: Something already exists at the original location. }
+
+  /shares/{id}/trash/empty:
+    post:
+      tags: [files]
+      summary: Empty the trash
+      operationId: emptyTrash
+      parameters: [{ $ref: "#/components/parameters/shareId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                batch:
+                  type: string
+                  description: One batch's timestamp name; empty means everything.
+      responses:
+        "200":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed: { type: integer }
+
+  /audit/deletes:
+    get:
+      tags: [files]
+      summary: Recent delete attempts
+      operationId: auditDeletes
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 1000 } }
+      responses:
+        "200":
+          description: Newest first, across every share.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deletions:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+
+  /events:
+    get:
+      tags: [system]
+      summary: Server-Sent Events stream
+      description: |
+        `text/event-stream`. Events: `scan.started`, `scan.progress` (at most
+        every 500 ms per scan), `scan.completed`, `scan.cancelled`,
+        `scan.failed`, `scan.paused`, `scan.resumed`, `share.state`,
+        `node.deleted`. Each carries an `id`; reconnect with `Last-Event-ID`
+        to replay up to the last 100. A heartbeat comment is sent every 15 s.
+        A client that falls behind receives a `reconnect` event and is
+        disconnected.
+      operationId: events
+      parameters:
+        - { name: Last-Event-ID, in: header, schema: { type: integer } }
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream: {}
+        "503": { description: Too many streams are open. }
+
+  /version:
+    get:
+      tags: [system]
+      summary: Build information
+      operationId: version
+      responses:
+        "200":
+          description: Version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  commit: { type: string }
+                  build_date: { type: string }
+                  go: { type: string }
+                  os: { type: string }
+                  arch: { type: string }
+
+  /config:
+    get:
+      tags: [system]
+      summary: Effective configuration
+      operationId: config
+      responses:
+        "200":
+          description: The configuration in effect, with any secrets redacted.
+          content:
+            application/json:
+              schema: { type: object }
+
+components:
+  parameters:
+    shareId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
+    scanId:
+      name: scanId
+      in: path
+      required: true
+      schema: { type: string }
+    path:
+      name: path
+      in: query
+      description: Share-relative path; empty for the root.
+      schema: { type: string, default: "" }
+    basis:
+      name: basis
+      in: query
+      schema: { $ref: "#/components/schemas/Basis" }
+
+  responses:
+    BadRequest:
+      description: The request was malformed or named an unsafe path.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such share, scan or path.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotScanned:
+      description: The share has no results yet (`share_not_scanned`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    CSRF:
+      description: Missing `X-Requested-With` header or cross-origin request (`csrf_rejected`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Basis:
+      type: string
+      enum: [apparent, allocated]
+      default: apparent
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: A stable machine-readable code.
+              examples: [share_not_found, path_not_found, csrf_rejected, confirmation_required, delete_disabled]
+            message: { type: string }
+            details: { type: object }
+
+    Share:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        path: { type: string }
+        state:
+          type: string
+          enum: [unavailable, never-scanned, scanning, ready, ready-stale, error]
+        error: { type: string }
+        discovered: { type: boolean }
+        allow_delete: { type: boolean }
+        allow_download: { type: boolean }
+        concurrency: { type: integer }
+        schedule: { type: string, description: Cron expression, empty for none. }
+        next_scan: { type: [string, "null"], format: date-time }
+        size_basis: { $ref: "#/components/schemas/Basis" }
+        excludes: { type: array, items: { type: string } }
+        filesystem:
+          type: [object, "null"]
+          properties:
+            type: { type: string }
+            mount_point: { type: string }
+            readonly: { type: boolean }
+        generation: { type: [string, "null"] }
+        last_scan: { type: [string, "null"], format: date-time }
+        stats:
+          type: [object, "null"]
+          properties:
+            files: { type: integer }
+            dirs: { type: integer }
+            symlinks: { type: integer }
+            others: { type: integer }
+            size: { type: integer }
+            alloc: { type: integer }
+            hardlink_dups: { type: integer }
+            excluded: { type: integer }
+            errors: { type: integer }
+            max_depth: { type: integer }
+        checked_at: { type: string, format: date-time }
+        scan:
+          oneOf:
+            - { $ref: "#/components/schemas/ScanStatus" }
+            - { type: "null" }
+        delete_blocked:
+          type: string
+          description: Why deleting is unavailable; absent when it is available.
+        trash_enabled: { type: boolean }
+        zip_enabled: { type: boolean }
+
+    Node:
+      type: object
+      properties:
+        name: { type: string }
+        name_b64:
+          type: string
+          description: Raw bytes of a name that is not valid UTF-8.
+        path: { type: string }
+        kind: { type: string, enum: [dir, file, symlink, other] }
+        size: { type: integer, description: Apparent size, or aggregate for a directory. }
+        alloc: { type: integer, description: Allocated size, or aggregate for a directory. }
+        mtime: { type: string, format: date-time }
+        mode: { type: string, description: Octal, e.g. "0644". }
+        perms: { type: string, description: ls-style, e.g. "-rw-r--r--". }
+        uid: { type: integer }
+        gid: { type: integer }
+        owner: { type: string }
+        group: { type: string }
+        ext: { type: string }
+        flags:
+          type: object
+          properties:
+            partial: { type: boolean, description: Some entries beneath could not be read. }
+            mountpoint: { type: boolean, description: Another filesystem; not scanned. }
+            hardlink_dup: { type: boolean, description: Another name for an inode already counted. }
+            excluded: { type: boolean, description: Entries beneath were skipped by an exclusion pattern. }
+            unscanned: { type: boolean }
+        files: { type: integer, description: Aggregate, directories only. }
+        dirs: { type: integer, description: Aggregate, directories only. }
+        children: { type: integer, description: Direct children, directories only. }
+        pct_of_parent: { type: number }
+        pct_of_share: { type: number }
+
+    TreemapNode:
+      allOf:
+        - { $ref: "#/components/schemas/Node" }
+        - type: object
+          properties:
+            children_list:
+              type: array
+              items: { $ref: "#/components/schemas/TreemapNode" }
+            children_total: { type: integer }
+            truncated:
+              type: object
+              description: Children not emitted, so their area can still be drawn.
+              properties:
+                children: { type: integer }
+                size: { type: integer }
+                alloc: { type: integer }
+
+    TreeResponse:
+      type: object
+      properties:
+        share: { type: string }
+        generation: { type: string }
+        basis: { $ref: "#/components/schemas/Basis" }
+        node: { $ref: "#/components/schemas/Node" }
+        ancestors:
+          type: array
+          items: { $ref: "#/components/schemas/Node" }
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/TreemapNode" }
+        total: { type: integer }
+        offset: { type: integer }
+        limit: { type: integer }
+
+    ScanStatus:
+      type: object
+      properties:
+        id: { type: string }
+        share_id: { type: string }
+        trigger: { type: string, enum: [manual, schedule, startup, rescan, reconcile] }
+        path: { type: string, description: Empty for a full scan. }
+        started_at: { type: string, format: date-time }
+        queued: { type: boolean }
+        paused: { type: boolean }
+        progress:
+          type: object
+          properties:
+            dirs: { type: integer }
+            files: { type: integer }
+            bytes: { type: integer }
+            errors: { type: integer }
+            excluded: { type: integer }
+            pending: { type: integer }
+            current_path: { type: string }
+            elapsed_ms: { type: integer }
+            rate_files_per_s: { type: number }
+            paused: { type: boolean }
+
+    ScanRecord:
+      type: object
+      properties:
+        id: { type: string }
+        share_id: { type: string }
+        trigger: { type: string }
+        path: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        duration_ms: { type: integer }
+        outcome: { type: string, enum: [completed, cancelled, failed] }
+        error: { type: string }
+        generation: { type: string }
+        files: { type: integer }
+        dirs: { type: integer }
+        bytes: { type: integer }
+        errors: { type: integer }
+
+    DeletePreview:
+      type: object
+      properties:
+        share: { type: string }
+        generation: { type: string }
+        targets:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              kind: { type: string }
+              size: { type: integer }
+              alloc: { type: integer }
+              files: { type: integer }
+              dirs: { type: integer }
+              exists: { type: boolean }
+              warnings: { type: array, items: { type: string } }
+        total_size: { type: integer }
+        total_alloc: { type: integer }
+        total_files: { type: integer }
+        total_dirs: { type: integer }
+        confirm: { type: string, description: Single-use token for POST /delete. }
+        expires_at: { type: string, format: date-time }
+        confirm_mode: { type: string, enum: [simple, name] }
+        name_to_type:
+          type: string
+          description: Text the user must type to confirm; empty when a plain acknowledgement suffices.
+        trash: { type: boolean }
+
+    DeleteResult:
+      type: object
+      properties:
+        share: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              outcome: { type: string, enum: [deleted, partial, failed] }
+              freed: { type: integer }
+              freed_alloc: { type: integer }
+              removed: { type: integer }
+              failed: { type: integer }
+              errno: { type: string }
+              message: { type: string }
+              trash: { type: string, description: Where the item went, in trash mode. }
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    path: { type: string }
+                    errno: { type: string }
+                    message: { type: string }
+        freed_total: { type: integer }
+        reconcile:
+          type: [array, "null"]
+          items: { type: string }
+          description: Folders being rescanned because a delete only partly succeeded.
+
+    TrashItem:
+      type: object
+      properties:
+        batch: { type: string }
+        trash_path: { type: string }
+        original_path: { type: string }
+        deleted_at: { type: string, format: date-time }
+        kind: { type: string }
+        size: { type: integer }
+        blocked: { type: boolean, description: The original location is occupied again. }
+
+    AuditEntry:
+      type: object
+      properties:
+        time: { type: string, format: date-time }
+        share: { type: string }
+        path: { type: string }
+        kind: { type: string }
+        size: { type: integer }
+        alloc: { type: integer }
+        files: { type: integer }
+        dirs: { type: integer }
+        outcome: { type: string, enum: [deleted, partial, failed, restored, emptied] }
+        removed: { type: integer }
+        failed: { type: integer }
+        errno: { type: string }
+        error: { type: string }
+        trash: { type: string }
+        client_ip: { type: string }
+        user_agent: { type: string }
+        forwarded_for: { type: string }

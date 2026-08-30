@@ -1,0 +1,31 @@
+# ShareDirStat has NO authentication. Attach your cluster's auth middleware here.
+# The Traefik/Authelia example below is commented out; adapt to your stack.
+#
+# apiVersion: traefik.io/v1alpha1
+# kind: Middleware
+# metadata:
+#   name: sharedirstat-auth
+# spec:
+#   forwardAuth:
+#     address: http://authelia.auth.svc.cluster.local/api/verify?rd=https://auth.home.arpa
+#     trustForwardHeader: true
+#     authResponseHeaders: ["Remote-User", "Remote-Groups"]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sharedirstat
+  annotations: {}
+    # traefik.ingress.kubernetes.io/router.middlewares: sharedirstat-sharedirstat-auth@kubernetescrd
+spec:
+  rules:
+    - host: sharedirstat.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sharedirstat
+                port:
+                  name: http
