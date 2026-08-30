@@ -236,7 +236,7 @@ describe('drawHighlight', () => {
   it('skips rectangles too small to outline', () => {
     const ctx = new RecordingCtx();
     const tiny: Cell = {
-      key: 't', node: null, rect: { x: 0, y: 0, w: 1, h: 1 },
+      key: 't', parentPath: null, node: null, rect: { x: 0, y: 0, w: 1, h: 1 },
       content: null, header: null, depth: 0, kind: 'leaf', truncatedSize: 0, truncatedCount: 0,
     };
     drawHighlight(ctx, tiny, [], THEME, THEME.hover);

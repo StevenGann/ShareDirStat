@@ -12,11 +12,23 @@ export function formatBytes(n: number, decimal = false): string {
     v /= base;
     i++;
   }
-  const digits = i === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0;
+  let digits = i === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0;
+  // Rounding can push the value up onto the next unit (1048575 B rounds to
+  // "1024 KiB" at 0 decimals). Re-divide once so the unit matches the number
+  // actually printed, otherwise the size column shows 1024 KiB immediately
+  // above 1.00 MiB and looks mis-sorted.
+  if (Number(v.toFixed(digits)) >= base && i < units.length - 1) {
+    v /= base;
+    i++;
+    digits = v < 10 ? 2 : v < 100 ? 1 : 0;
+  }
   return `${v.toFixed(digits)} ${units[i]}`;
 }
 
 const counts = new Intl.NumberFormat();
+// Hoisted: relativeTime runs once per visible row per render, and constructing
+// an Intl formatter each time is far more expensive than the formatting.
+const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 
 /** Formats a plain count with thousands separators. */
 export function formatCount(n: number): string {
@@ -36,13 +48,13 @@ export function relativeTime(iso: string | null | undefined, now = Date.now()): 
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
   const s = Math.round((now - t) / 1000);
-  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
   const abs = Math.abs(s);
   if (abs < 60) return rtf.format(-s, 'second');
   if (abs < 3600) return rtf.format(-Math.round(s / 60), 'minute');
   if (abs < 86400) return rtf.format(-Math.round(s / 3600), 'hour');
   if (abs < 2592000) return rtf.format(-Math.round(s / 86400), 'day');
-  return rtf.format(-Math.round(s / 2592000), 'month');
+  if (abs < 31536000) return rtf.format(-Math.round(s / 2592000), 'month');
+  return rtf.format(-Math.round(s / 31536000), 'year');
 }
 
 /** Absolute timestamp for tooltips. */

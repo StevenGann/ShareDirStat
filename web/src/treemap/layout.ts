@@ -8,6 +8,12 @@ import { inset, squarify, type Rect } from './squarify';
 export interface Cell {
   /** Share-relative path; truncated cells reuse their parent's with a suffix. */
   key: string;
+  /**
+   * The containing directory's path, or null at the root. Ancestor lookup
+   * needs this explicitly: a truncated cell's key is not a real path, so
+   * deriving containment from the key by string prefix skipped its own parent.
+   */
+  parentPath: string | null;
   node: TreemapNode | null;
   rect: Rect;
   /** The content box a directory's children were laid out in. */
@@ -85,6 +91,7 @@ export function layoutTreemap(root: TreemapNode, viewport: Rect, opts: LayoutOpt
       if (kid.kind !== 'dir' || !hasChildren) {
         cells.push({
           key: kid.path,
+          parentPath: parent.path,
           node: kid,
           rect,
           content: null,
@@ -106,6 +113,7 @@ export function layoutTreemap(root: TreemapNode, viewport: Rect, opts: LayoutOpt
 
       cells.push({
         key: kid.path,
+        parentPath: parent.path,
         node: kid,
         rect,
         content,
@@ -126,6 +134,7 @@ export function layoutTreemap(root: TreemapNode, viewport: Rect, opts: LayoutOpt
       if (rect && rect.w >= minCell && rect.h >= minCell) {
         cells.push({
           key: `${parent.path} truncated`,
+          parentPath: parent.path,
           node: null,
           rect,
           content: null,
