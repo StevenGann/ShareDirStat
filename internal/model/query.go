@@ -9,12 +9,16 @@ import (
 // SortField selects the ordering of a child listing.
 type SortField string
 
-// Sort fields accepted by the tree endpoint.
+// Sort fields accepted by the tree endpoint. SortDur orders by media playing
+// time; SortSpm orders by media bytes per minute of playing time, the
+// "which encode is fattest" metric. Both rank entries without media last.
 const (
 	SortSize  SortField = "size"
 	SortName  SortField = "name"
 	SortMtime SortField = "mtime"
 	SortFiles SortField = "files"
+	SortDur   SortField = "duration"
+	SortSpm   SortField = "spm"
 )
 
 // ParseSort validates a sort field, defaulting to size.
@@ -28,6 +32,10 @@ func ParseSort(s string) (SortField, bool) {
 		return SortMtime, true
 	case SortFiles:
 		return SortFiles, true
+	case SortDur:
+		return SortDur, true
+	case SortSpm:
+		return SortSpm, true
 	}
 	return SortSize, false
 }
@@ -142,6 +150,10 @@ func (g *Generation) childOrder(idx uint32, opts ListOptions) []uint32 {
 			c = compareInt64(na.Mtime, nb.Mtime)
 		case SortFiles:
 			c = compareUint64(uint64(na.Files), uint64(nb.Files))
+		case SortDur:
+			c = compareUint64(uint64(g.durOf(a)), uint64(g.durOf(b)))
+		case SortSpm:
+			c = compareFloat64(g.bytesPerMin(a), g.bytesPerMin(b))
 		default:
 			c = compareUint64(na.Sized(opts.Basis), nb.Sized(opts.Basis))
 		}
@@ -159,6 +171,38 @@ func (g *Generation) childOrder(idx uint32, opts ListOptions) []uint32 {
 	}
 	slices.SortFunc(live, cmp)
 	return live
+}
+
+// durOf returns a node's media duration, 0 when the arrays are absent.
+// Caller must hold the lock.
+func (g *Generation) durOf(idx uint32) uint32 {
+	if g.durs == nil {
+		return 0
+	}
+	return g.durs[idx]
+}
+
+// bytesPerMin ranks a node for SortSpm: media bytes per minute of playing
+// time, -1 when the node has no media so it always sorts beneath any that
+// does. float64 keeps the ratio exact enough for ordering without the
+// overflow a cross-multiplied integer compare would risk. Caller must hold
+// the lock.
+func (g *Generation) bytesPerMin(idx uint32) float64 {
+	d := g.durOf(idx)
+	if d == 0 {
+		return -1
+	}
+	return float64(g.mediaSize[idx]) * 60 / float64(d)
+}
+
+func compareFloat64(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
 
 func compareUint64(a, b uint64) int {

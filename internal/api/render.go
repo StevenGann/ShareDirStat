@@ -19,24 +19,29 @@ type flagsJSON struct {
 
 // nodeJSON is the API representation of one filesystem entry (§9.2).
 type nodeJSON struct {
-	Name        string           `json:"name"`
-	NameB64     string           `json:"name_b64,omitempty"`
-	Path        string           `json:"path"`
-	Kind        string           `json:"kind"`
-	Size        uint64           `json:"size"`
-	Alloc       uint64           `json:"alloc"`
-	Mtime       time.Time        `json:"mtime"`
-	Mode        string           `json:"mode"`
-	Perms       string           `json:"perms"`
-	UID         uint32           `json:"uid"`
-	GID         uint32           `json:"gid"`
-	Owner       string           `json:"owner,omitempty"`
-	Group       string           `json:"group,omitempty"`
-	Ext         string           `json:"ext,omitempty"`
-	Flags       flagsJSON        `json:"flags"`
-	Files       uint32           `json:"files"`
-	Dirs        uint32           `json:"dirs"`
-	Children    uint32           `json:"children"`
+	Name     string    `json:"name"`
+	NameB64  string    `json:"name_b64,omitempty"`
+	Path     string    `json:"path"`
+	Kind     string    `json:"kind"`
+	Size     uint64    `json:"size"`
+	Alloc    uint64    `json:"alloc"`
+	Mtime    time.Time `json:"mtime"`
+	Mode     string    `json:"mode"`
+	Perms    string    `json:"perms"`
+	UID      uint32    `json:"uid"`
+	GID      uint32    `json:"gid"`
+	Owner    string    `json:"owner,omitempty"`
+	Group    string    `json:"group,omitempty"`
+	Ext      string    `json:"ext,omitempty"`
+	Flags    flagsJSON `json:"flags"`
+	Files    uint32    `json:"files"`
+	Dirs     uint32    `json:"dirs"`
+	Children uint32    `json:"children"`
+	// Duration is the media playing time in seconds (a file's own; the
+	// aggregate beneath a directory) and MediaSize the bytes it covers.
+	// Both are absent when nothing beneath the node has a known duration.
+	Duration    uint32           `json:"duration,omitempty"`
+	MediaSize   uint64           `json:"media_size,omitempty"`
 	PctOfParent float64          `json:"pct_of_parent"`
 	PctOfShare  float64          `json:"pct_of_share"`
 	SubChildren []nodeJSON       `json:"children_list,omitempty"`
@@ -63,20 +68,22 @@ func (r renderer) sized(n *model.NodeInfo) uint64 {
 // there is no meaningful parent.
 func (r renderer) node(n model.NodeInfo, parentSize uint64) nodeJSON {
 	out := nodeJSON{
-		Name:     n.Name,
-		Path:     n.Path,
-		Kind:     n.Kind.String(),
-		Size:     n.Size,
-		Alloc:    n.Alloc,
-		Mtime:    n.Mtime,
-		Mode:     "0" + strconv.FormatUint(uint64(n.Mode), 8),
-		Perms:    permString(n.Kind, n.Mode),
-		UID:      n.UID,
-		GID:      n.GID,
-		Ext:      n.Ext,
-		Files:    n.Files,
-		Dirs:     n.Dirs,
-		Children: n.ChildCount,
+		Name:      n.Name,
+		Path:      n.Path,
+		Kind:      n.Kind.String(),
+		Size:      n.Size,
+		Alloc:     n.Alloc,
+		Mtime:     n.Mtime,
+		Mode:      "0" + strconv.FormatUint(uint64(n.Mode), 8),
+		Perms:     permString(n.Kind, n.Mode),
+		UID:       n.UID,
+		GID:       n.GID,
+		Ext:       n.Ext,
+		Files:     n.Files,
+		Dirs:      n.Dirs,
+		Children:  n.ChildCount,
+		Duration:  n.Dur,
+		MediaSize: n.MediaSize,
 		Flags: flagsJSON{
 			Partial:     n.Flags.Has(model.FlagPartial),
 			MountPoint:  n.Flags.Has(model.FlagMountPoint),

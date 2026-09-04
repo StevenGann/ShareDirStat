@@ -1,5 +1,13 @@
 import type { ShareInfo, ScanStatus } from '../api';
-import { formatBytes, formatCount, formatRate, relativeTime, absoluteTime, truncatePath } from '../format';
+import {
+  formatBytes,
+  formatCount,
+  formatPlaytime,
+  formatRate,
+  relativeTime,
+  absoluteTime,
+  truncatePath,
+} from '../format';
 import { useThemePref, type ThemePref } from '../theme';
 import { Logo } from './icons';
 
@@ -57,6 +65,8 @@ export function ShareBar({ shares, current, scan, busy, onSelect, onScan, onCanc
             <strong>{formatBytes(stats.size)}</strong>
             <span className="muted">
               {formatCount(stats.files)} files · {formatCount(stats.dirs)} folders
+              {stats.media_duration > 0 &&
+                ` · ${formatPlaytime(stats.media_duration)} of media`}
             </span>
           </span>
         )}

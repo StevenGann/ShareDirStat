@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { api, type Basis, type Node, type ShareInfo } from '../api';
-import { formatBytes, formatCount, relativeTime } from '../format';
+import { formatBytes, formatCount, formatPlaytime, relativeTime } from '../format';
 import { useAsyncData, useLongPress } from '../hooks';
 import { IconCheck, IconChevron, IconFile, IconFolder, IconKebab } from './icons';
 import { NodeTags, type SortField } from './Tree';
@@ -49,12 +49,27 @@ export function BrowseList({
   onOpenDetail,
   onMenu,
 }: Props) {
-  const key = `${share.id}|${generation ?? ''}|${path}|${basis}|${sort}|${desc ? 'desc' : 'asc'}`;
+  // "Show more" grows the page rather than appending, so useAsyncData's
+  // key-based cache stays the single source of truth; the server caps at
+  // 5000. Limits are kept per folder, so navigating away and back needs no
+  // reset — every other folder simply starts at its own default.
+  const [limits, setLimits] = useState<Record<string, number>>({});
+  const limit = limits[path] ?? PAGE;
+
+  const listKey = `${share.id}|${generation ?? ''}|${path}|${basis}|${sort}|${desc ? 'desc' : 'asc'}`;
   const load = useCallback(
-    () => api.tree(share.id, path, { basis, sort, order: desc ? 'desc' : 'asc', limit: PAGE }),
-    [share.id, path, basis, sort, desc],
+    () => api.tree(share.id, path, { basis, sort, order: desc ? 'desc' : 'asc', limit }),
+    [share.id, path, basis, sort, desc, limit],
   );
-  const { data, error, loading } = useAsyncData(key, load, Boolean(generation));
+  // The holdKey keeps the current page on screen while a bigger one loads,
+  // so "Show more" neither blanks the list nor resets the scroll; any other
+  // change (folder, sort, basis) drops it as usual.
+  const { data, error, loading } = useAsyncData(
+    `${listKey}|${limit}`,
+    load,
+    Boolean(generation),
+    listKey,
+  );
 
   if (!share.generation) {
     return (
@@ -110,6 +125,8 @@ export function BrowseList({
             <option value="name">By name</option>
             <option value="mtime">Newest first</option>
             <option value="files">Most files</option>
+            <option value="duration">Longest media</option>
+            <option value="spm">Largest per minute</option>
           </select>
         </label>
         <button
@@ -172,7 +189,15 @@ export function BrowseList({
         {data && data.total > data.children.length && (
           <p className="muted pane-note">
             Showing the largest {formatCount(data.children.length)} of {formatCount(data.total)}{' '}
-            entries — use search to narrow.
+            entries.{' '}
+            <button
+              type="button"
+              className="link"
+              disabled={loading}
+              onClick={() => setLimits((prev) => ({ ...prev, [path]: limit + PAGE }))}
+            >
+              Show more
+            </button>
           </p>
         )}
       </div>
@@ -256,6 +281,7 @@ function BrowseRow({
           <span className="muted small">
             {relativeTime(node.mtime)}
             {isDir && ` · ${formatCount(node.files)} files`}
+            {node.duration ? ` · ${formatPlaytime(node.duration)}` : ''}
           </span>
         </span>
         <span className="browse-size num">

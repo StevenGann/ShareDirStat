@@ -25,8 +25,17 @@ import (
 var Magic = [8]byte{'S', 'D', 'S', 'S', 'N', 'A', 'P', 0x01}
 
 // FormatVersion is bumped whenever the on-disk layout changes
-// incompatibly. A file with any other version is ignored (FR-DATA-02).
-const FormatVersion uint16 = 1
+// incompatibly. A file with any other supported version still loads; an
+// unknown version is ignored (FR-DATA-02).
+//
+// Version 2 appends the optional media sections (per-node durations and
+// media sizes) after the dropped-error count. A generation without media
+// data is still written as version 1, so shares that never grew the arrays
+// keep snapshots an older binary can read.
+const FormatVersion uint16 = 2
+
+// minFormatVersion is the oldest snapshot layout this build still reads.
+const minFormatVersion uint16 = 1
 
 // Compression flags.
 const (
@@ -108,7 +117,7 @@ func decodeNode(buf []byte, n *model.Node) {
 }
 
 // writeHeader emits the uncompressed frame header.
-func writeHeader(w io.Writer, h Header, flags uint16) error {
+func writeHeader(w io.Writer, h Header, flags, version uint16) error {
 	body, err := json.Marshal(h)
 	if err != nil {
 		return err
@@ -118,7 +127,7 @@ func writeHeader(w io.Writer, h Header, flags uint16) error {
 	}
 	var fixed [16]byte
 	copy(fixed[:8], Magic[:])
-	binary.LittleEndian.PutUint16(fixed[8:], FormatVersion)
+	binary.LittleEndian.PutUint16(fixed[8:], version)
 	binary.LittleEndian.PutUint16(fixed[10:], flags)
 	binary.LittleEndian.PutUint32(fixed[12:], u32len(len(body)))
 	if _, err := w.Write(fixed[:]); err != nil {
@@ -128,32 +137,34 @@ func writeHeader(w io.Writer, h Header, flags uint16) error {
 	return err
 }
 
-// readHeader parses the uncompressed frame header.
-func readHeader(r io.Reader) (Header, uint16, error) {
+// readHeader parses the uncompressed frame header and returns the file's
+// format version, which selects the payload layout.
+func readHeader(r io.Reader) (Header, uint16, uint16, error) {
 	var fixed [16]byte
 	if _, err := io.ReadFull(r, fixed[:]); err != nil {
-		return Header{}, 0, fmt.Errorf("%w: %w", ErrBadMagic, err)
+		return Header{}, 0, 0, fmt.Errorf("%w: %w", ErrBadMagic, err)
 	}
 	if [8]byte(fixed[:8]) != Magic {
-		return Header{}, 0, ErrBadMagic
+		return Header{}, 0, 0, ErrBadMagic
 	}
-	if v := binary.LittleEndian.Uint16(fixed[8:]); v != FormatVersion {
-		return Header{}, 0, fmt.Errorf("%w: file is version %d, this build reads version %d", ErrVersion, v, FormatVersion)
+	version := binary.LittleEndian.Uint16(fixed[8:])
+	if version < minFormatVersion || version > FormatVersion {
+		return Header{}, 0, 0, fmt.Errorf("%w: file is version %d, this build reads versions %d-%d", ErrVersion, version, minFormatVersion, FormatVersion)
 	}
 	flags := binary.LittleEndian.Uint16(fixed[10:])
 	n := binary.LittleEndian.Uint32(fixed[12:])
 	if n > maxHeaderBytes {
-		return Header{}, 0, fmt.Errorf("%w: header of %d bytes is implausible", ErrCorrupt, n)
+		return Header{}, 0, 0, fmt.Errorf("%w: header of %d bytes is implausible", ErrCorrupt, n)
 	}
 	body := make([]byte, n)
 	if _, err := io.ReadFull(r, body); err != nil {
-		return Header{}, 0, fmt.Errorf("%w: short header: %w", ErrCorrupt, err)
+		return Header{}, 0, 0, fmt.Errorf("%w: short header: %w", ErrCorrupt, err)
 	}
 	var h Header
 	if err := json.Unmarshal(body, &h); err != nil {
-		return Header{}, 0, fmt.Errorf("%w: %w", ErrCorrupt, err)
+		return Header{}, 0, 0, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
-	return h, flags, nil
+	return h, flags, version, nil
 }
 
 // crcTable is the Castagnoli table; hardware-accelerated on arm64 and amd64.
@@ -172,8 +183,10 @@ func u32len(n int) uint32 {
 	return uint32(n) //nolint:gosec // bounds-checked immediately above
 }
 
-// writePayload encodes the arrays, streaming through the CRC hasher.
-func writePayload(w io.Writer, raw model.Raw) error {
+// writePayload encodes the arrays, streaming through the CRC hasher. The
+// version must match what writeHeader put in the frame: version 2 appends
+// the media sections, version 1 predates them.
+func writePayload(w io.Writer, raw model.Raw, version uint16) error {
 	h := crc32.New(crcTable)
 	mw := io.MultiWriter(w, h)
 	bw := bufio.NewWriterSize(mw, 256*1024)
@@ -255,6 +268,29 @@ func writePayload(w io.Writer, raw model.Raw) error {
 	if err := putU64(raw.ErrorsDropped); err != nil {
 		return err
 	}
+
+	if version >= 2 {
+		present := byte(0)
+		if raw.Durs != nil {
+			present = 1
+		}
+		if err := bw.WriteByte(present); err != nil {
+			return err
+		}
+		if present == 1 {
+			for _, d := range raw.Durs {
+				if err := putU32(d); err != nil {
+					return err
+				}
+			}
+			for _, m := range raw.MediaSizes {
+				if err := putU64(m); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	if err := bw.Flush(); err != nil {
 		return err
 	}
@@ -325,8 +361,9 @@ const (
 	initialNameAlloc = 1 << 20
 )
 
-// readPayload decodes the arrays and verifies the checksum.
-func readPayload(r io.Reader, h Header) (model.Raw, error) {
+// readPayload decodes the arrays and verifies the checksum. version is the
+// frame version readHeader returned.
+func readPayload(r io.Reader, h Header, version uint16) (model.Raw, error) {
 	p := &payloadReader{br: bufio.NewReaderSize(r, 256*1024), h: crc32.New(crcTable)}
 	var raw model.Raw
 	corrupt := func(what string, err error) (model.Raw, error) {
@@ -440,6 +477,33 @@ func readPayload(r io.Reader, h Header) (model.Raw, error) {
 	}
 	if raw.ErrorsDropped, err = p.u64(); err != nil {
 		return corrupt("dropped errors", err)
+	}
+
+	if version >= 2 {
+		if err := p.read(p.buf[:1]); err != nil {
+			return corrupt("media flag", err)
+		}
+		if p.buf[0] == 1 {
+			// Both arrays are exactly one entry per node; the incremental
+			// growth mirrors the node array's, so the declared count cannot
+			// size an allocation the file does not back.
+			raw.Durs = make([]uint32, 0, min(nodeCount, initialNodeAlloc))
+			for i := uint64(0); i < nodeCount; i++ {
+				d, err := p.u32()
+				if err != nil {
+					return corrupt("media durations", err)
+				}
+				raw.Durs = append(raw.Durs, d)
+			}
+			raw.MediaSizes = make([]uint64, 0, min(nodeCount, initialNodeAlloc))
+			for i := uint64(0); i < nodeCount; i++ {
+				m, err := p.u64()
+				if err != nil {
+					return corrupt("media sizes", err)
+				}
+				raw.MediaSizes = append(raw.MediaSizes, m)
+			}
+		}
 	}
 
 	// The trailer is read straight from the buffer, outside the digest.

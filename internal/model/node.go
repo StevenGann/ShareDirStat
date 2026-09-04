@@ -155,6 +155,8 @@ type Entry struct {
 	Mode  uint16
 	UID   uint32
 	GID   uint32
+	// Dur is the media playing time in seconds, 0 when unknown or not media.
+	Dur uint32
 }
 
 // NodeInfo is the resolved, API-facing view of a node.
@@ -176,6 +178,13 @@ type NodeInfo struct {
 	Dirs       uint32
 	ChildCount uint32
 	Ext        string
+	// Dur is the media playing time in seconds: a file's own for files, the
+	// aggregate of everything beneath for directories. 0 when unknown.
+	Dur uint32
+	// MediaSize is the bytes of media with a known duration: the file's own
+	// size for media files, the aggregate for directories. Together with Dur
+	// it yields the size-per-minute metric.
+	MediaSize uint64
 }
 
 // Stats summarises a whole generation.
@@ -190,6 +199,10 @@ type Stats struct {
 	Excluded     uint64 `json:"excluded"`
 	Errors       uint64 `json:"errors"`
 	MaxDepth     uint32 `json:"max_depth"`
+	// MediaSize and MediaDur are the share-wide media totals: bytes of files
+	// with a known playing time, and that playing time in seconds.
+	MediaSize uint64 `json:"media_size"`
+	MediaDur  uint64 `json:"media_duration"`
 }
 
 // ExtStat is one row of the extension table (§8.1).
@@ -218,9 +231,14 @@ func safeName(raw []byte) (string, bool) {
 	return string([]rune(string(raw))), false
 }
 
-// extensionOf returns the lower-cased extension of a file name: the text
+// ExtensionOf returns the lower-cased extension of a file name: the text
 // after the final dot, at most 16 bytes, empty when there is none. A name
-// that begins with a dot and contains no other dot has no extension.
+// that begins with a dot and contains no other dot has no extension. It is
+// exported so the scanner classifies media files with the same rule the
+// extension table uses.
+func ExtensionOf(name string) string { return extensionOf(name) }
+
+// extensionOf is the internal spelling of ExtensionOf.
 func extensionOf(name string) string {
 	dot := -1
 	for i := len(name) - 1; i >= 0; i-- {

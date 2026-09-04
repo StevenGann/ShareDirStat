@@ -7,7 +7,10 @@ Snapshots exist so that results survive a restart without rescanning. They are
 never read on the request path: the server loads them once at startup and
 serves every query from the in-memory arena.
 
-- **Format version:** 1 (`FormatVersion` in `internal/snapshot/format.go`)
+- **Format version:** 2 (`FormatVersion` in `internal/snapshot/format.go`);
+  version 1 is still read. Version 2 adds the optional media sections. A
+  generation with no media data is still written as version 1, so it stays
+  readable by older builds.
 - **Byte order:** little-endian throughout
 - **Compression:** zstd (level "default") over the payload only
 
@@ -23,7 +26,7 @@ new one intact, never a half-written file (NFR-8).
 ```
 +-------------------------------------------------------------+
 | magic          8 bytes   "SDSSNAP\x01"                       |  uncompressed
-| formatVersion  uint16    1                                   |  frame header
+| formatVersion  uint16    1 or 2                              |  frame header
 | flags          uint16    bit 0 = payload is zstd-compressed  |
 | headerLen      uint32    length of the JSON header           |
 | header         headerLen bytes of JSON (see below)           |
@@ -77,8 +80,16 @@ errCount     uint32
   errno      uint32 length + bytes
   message    uint32 length + bytes
 errsDropped  uint64
+mediaFlag    uint8                   (version >= 2 only; 1 = sections follow)
+  durs       nodeCount x uint32      (media playing time, seconds)
+  mediaSize  nodeCount x uint64      (bytes of media behind that time)
 crc32c       uint32                  (trailer; see below)
 ```
+
+The media arrays are index-aligned with the node array: a file's entry is its
+own playing time and size, a directory's the aggregate beneath it (hard-link
+duplicates counted once, like `Size`). `mediaFlag` 0 means the scan did not
+collect durations, or found no media.
 
 The trailer is a CRC-32 Castagnoli checksum of every payload byte that
 precedes it. It is verified after decoding, which catches both bit rot and

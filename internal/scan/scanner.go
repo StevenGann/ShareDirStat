@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/StevenGann/ShareDirStat/internal/media"
 	"github.com/StevenGann/ShareDirStat/internal/model"
 )
 
@@ -34,6 +36,10 @@ type Options struct {
 	Excludes         []string
 	FollowSymlinks   bool
 	CrossMountPoints bool
+	// MediaDurations probes audio/video files for their playing time (one
+	// bounded header read per media file) so the model can offer the
+	// size-per-minute metric.
+	MediaDurations   bool
 	MaxNodes         int
 	TopN             int
 	SizeHint         int
@@ -159,6 +165,9 @@ func Run(ctx context.Context, opts Options, meta model.GenerationMeta, ctrl *Con
 	}
 
 	b := model.NewBuilder(opts.ShareID, opts.Root, opts.Basis, opts.MaxNodes, opts.SizeHint)
+	if opts.MediaDurations {
+		b.CollectMedia()
+	}
 	b.SetRootMeta(entryFromStat(filepath.Base(opts.Root), rootStat, rootFI.Mode(), haveRootStat, model.KindDir))
 
 	s := &scanner{
@@ -380,6 +389,14 @@ func (s *scanner) processDir(ctx context.Context, t dirTask, entries []model.Ent
 				continue
 			}
 			e, descend := s.classify(fd, t.path, name, st, mode, haveStat)
+			// Duplicate hard links skip the probe: the inode was measured at
+			// its first link, and the duplicate contributes nothing to the
+			// media aggregates anyway (FR-SCAN-17).
+			if s.opts.MediaDurations && e.Kind == model.KindFile && e.Size > 0 && !e.Flags.Has(model.FlagHardlinkDup) {
+				if ext := model.ExtensionOf(name); media.KnownExt(ext) {
+					e.Dur = s.probeDuration(fd, t.path, name, ext, e.Size)
+				}
+			}
 			// Hard-link duplicates occupy no additional space and are excluded
 			// from the aggregates at finalize; counting them here makes the
 			// live byte counter climb past the total the scan finally reports.
@@ -447,6 +464,31 @@ func (s *scanner) processDir(ctx context.Context, t dirTask, entries []model.Ent
 		})
 	}
 	return entries, scratch
+}
+
+// probeDuration opens one media file relative to its directory and asks the
+// media package for its playing time. Failures are deliberately silent: an
+// unreadable or malformed media file still has a correct size, and recording
+// them as scan errors would mark ancestors partial and drown real I/O
+// failures in files that merely lack a parseable header.
+func (s *scanner) probeDuration(fd int, dir, name, ext string, size uint64) uint32 {
+	f, err := openEntry(fd, dir, name)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = f.Close() }()
+	// Re-check the type through the opened descriptor: the entry can have
+	// been replaced since the lstat, and the probe must only ever read a
+	// regular file.
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return 0
+	}
+	d, ok := media.Probe(f, int64(min(size, math.MaxInt64)), ext) //nolint:gosec // clamped
+	if !ok {
+		return 0
+	}
+	return d
 }
 
 // joinPath appends a directory entry's name to its parent's absolute path.

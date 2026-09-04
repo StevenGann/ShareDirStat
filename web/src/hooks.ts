@@ -14,13 +14,25 @@ export interface AsyncState<T> {
  * while the effect runs: "loading" is derived by comparing the stored key
  * with the current one, so a stale result can never be mistaken for a fresh
  * one and no extra render is needed to clear it.
+ *
+ * `holdKey`, when given, lets the previous result stay on screen across a
+ * key change that is only a refinement of the same listing (a grown page
+ * size): while the stored holdKey still matches, the old data is returned
+ * with loading=true instead of null, so the list neither blanks nor loses
+ * its scroll position. A change of holdKey drops the old data as usual.
  */
-export function useAsyncData<T>(key: string, load: () => Promise<T>, enabled = true): AsyncState<T> {
-  const [state, setState] = useState<{ key: string; data: T | null; error: string | null }>({
-    key: '',
-    data: null,
-    error: null,
-  });
+export function useAsyncData<T>(
+  key: string,
+  load: () => Promise<T>,
+  enabled = true,
+  holdKey?: string,
+): AsyncState<T> {
+  const [state, setState] = useState<{
+    key: string;
+    holdKey?: string;
+    data: T | null;
+    error: string | null;
+  }>({ key: '', data: null, error: null });
 
   // The loader closes over props that change on every render; keeping it in a
   // ref means only `key` decides when to refetch.
@@ -35,19 +47,20 @@ export function useAsyncData<T>(key: string, load: () => Promise<T>, enabled = t
     loadRef
       .current()
       .then((data) => {
-        if (!cancelled) setState({ key, data, error: null });
+        if (!cancelled) setState({ key, holdKey, data, error: null });
       })
       .catch((e: unknown) => {
-        if (!cancelled) setState({ key, data: null, error: (e as Error).message });
+        if (!cancelled) setState({ key, holdKey, data: null, error: (e as Error).message });
       });
     return () => {
       cancelled = true;
     };
-  }, [key, enabled]);
+  }, [key, holdKey, enabled]);
 
   const fresh = state.key === key;
+  const held = !fresh && holdKey !== undefined && state.holdKey === holdKey;
   return {
-    data: enabled && fresh ? state.data : null,
+    data: enabled && (fresh || held) ? state.data : null,
     error: fresh ? state.error : null,
     loading: enabled && !fresh,
   };

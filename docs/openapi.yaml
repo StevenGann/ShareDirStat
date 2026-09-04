@@ -90,7 +90,11 @@ paths:
         - { $ref: "#/components/parameters/basis" }
         - name: sort
           in: query
-          schema: { type: string, enum: [size, name, mtime, files], default: size }
+          schema: { type: string, enum: [size, name, mtime, files, duration, spm], default: size }
+          description: >
+            `duration` orders by media playing time and `spm` by media bytes
+            per minute of playing time; entries without media sort last in
+            both.
         - name: order
           in: query
           schema: { type: string, enum: [asc, desc], default: desc }
@@ -820,6 +824,8 @@ components:
             excluded: { type: integer }
             errors: { type: integer }
             max_depth: { type: integer }
+            media_size: { type: integer, description: Bytes of media with a known playing time. }
+            media_duration: { type: integer, description: Total playing time in seconds. }
         checked_at: { type: string, format: date-time }
         scan:
           oneOf:
@@ -861,6 +867,17 @@ components:
         files: { type: integer, description: Aggregate, directories only. }
         dirs: { type: integer, description: Aggregate, directories only. }
         children: { type: integer, description: Direct children, directories only. }
+        duration:
+          type: integer
+          description: >
+            Media playing time in seconds (aggregate for a directory). Absent
+            when nothing beneath the node has a known duration, or when
+            scan.media_durations is off.
+        media_size:
+          type: integer
+          description: >
+            Bytes of media covered by `duration`; equals `size` for a media
+            file. Absent alongside `duration`.
         pct_of_parent: { type: number }
         pct_of_share: { type: number }
 

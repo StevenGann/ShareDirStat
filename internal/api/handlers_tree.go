@@ -81,7 +81,7 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 	}
 	sortField, valid := model.ParseSort(r.URL.Query().Get("sort"))
 	if !valid {
-		writeError(w, http.StatusBadRequest, "invalid_sort", "sort must be size, name, mtime or files", nil)
+		writeError(w, http.StatusBadRequest, "invalid_sort", "sort must be size, name, mtime, files, duration or spm", nil)
 		return
 	}
 	if notModified(w, r, gen) {

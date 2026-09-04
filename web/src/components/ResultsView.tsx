@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type Basis, type Node } from '../api';
-import { absoluteTime, formatBytes, formatCount, formatPercent, relativeTime } from '../format';
+import {
+  absoluteTime,
+  formatBytes,
+  formatCount,
+  formatPercent,
+  formatPlaytime,
+  relativeTime,
+} from '../format';
 import { useAsyncData } from '../hooks';
-import { IconKebab } from './icons';
+import { IconCheck, IconKebab } from './icons';
 
 /** What the results pane is showing. */
 export type ResultsMode =
@@ -17,10 +24,17 @@ interface Props {
   /** Scope for a search: the treemap's current root. */
   scope: string;
   selected: Node | null;
-  onSelect: (node: Node) => void;
+  /** Paths in the multi-selection, for row highlighting (FR-UI-08). */
+  selectedPaths: Set<string>;
+  onSelect: (node: Node, mode: 'replace' | 'toggle' | 'range') => void;
   onReveal: (node: Node) => void;
   /** Opens the action menu for a row (kebab button or right-click). */
   onMenu?: (node: Node, x: number, y: number) => void;
+  /** Checkbox multi-select, shared with the tree and the browse list. */
+  selectMode: boolean;
+  onSelectModeChange: (v: boolean) => void;
+  /** Adds many rows to the selection at once without moving the focus. */
+  onSelectAll: (nodes: Node[]) => void;
   onClose: () => void;
 }
 
@@ -52,9 +66,13 @@ export function ResultsView({
   mode,
   scope,
   selected,
+  selectedPaths,
   onSelect,
   onReveal,
   onMenu,
+  selectMode,
+  onSelectModeChange,
+  onSelectAll,
   onClose,
 }: Props) {
   // The caller remounts this component when `mode` changes (it passes a key
@@ -117,11 +135,33 @@ export function ResultsView({
     [items, basis],
   );
 
+  // Every result that is not yet in the selection; empty means "all picked".
+  const unpicked = useMemo(
+    () => (items ?? []).filter((n) => !selectedPaths.has(n.path)),
+    [items, selectedPaths],
+  );
+
   return (
     <section className="results-pane" aria-label={title}>
       <div className="pane-head">
         <h2>{title}</h2>
         <span className="spacer" />
+        <button
+          type="button"
+          aria-pressed={selectMode}
+          onClick={() => onSelectModeChange(!selectMode)}
+        >
+          {selectMode ? 'Done selecting' : 'Select'}
+        </button>
+        {selectMode && (
+          <button
+            type="button"
+            disabled={unpicked.length === 0}
+            onClick={() => onSelectAll(unpicked)}
+          >
+            Select all shown
+          </button>
+        )}
         <button type="button" onClick={onClose}>
           Back to tree
         </button>
@@ -192,76 +232,103 @@ export function ResultsView({
         <table className="results">
           <thead>
             <tr>
+              {selectMode && <th className="check-col" aria-label="Selected" />}
               <th>Path</th>
               <th className="num">Size</th>
-              <th className="num">% of share</th>
-              <th>Modified</th>
+              <th className="num share-col">% of share</th>
+              <th className="num">Length</th>
+              <th className="mtime-col">Modified</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {items?.length === 0 && (
               <tr>
-                <td colSpan={5} className="muted">
+                <td colSpan={selectMode ? 7 : 6} className="muted">
                   Nothing matched.
                 </td>
               </tr>
             )}
-            {items?.map((n) => (
-              <tr
-                key={n.path}
-                className={selected?.path === n.path ? 'selected' : undefined}
-                onClick={() => onSelect(n)}
-                onDoubleClick={() => onReveal(n)}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    onReveal(n);
+            {items?.map((n) => {
+              const picked = selectedPaths.has(n.path);
+              return (
+                <tr
+                  key={n.path}
+                  className={
+                    `${picked ? 'selected' : ''}${selected?.path === n.path ? ' focused' : ''}`.trim() ||
+                    undefined
                   }
-                }}
-                onContextMenu={
-                  onMenu &&
-                  ((e) => {
-                    e.preventDefault();
-                    onSelect(n);
-                    onMenu(n, e.clientX, e.clientY);
-                  })
-                }
-              >
-                <td className="mono wrap">{n.path}</td>
-                <td className="num">{formatBytes(basis === 'allocated' ? n.alloc : n.size)}</td>
-                <td className="num">{formatPercent(n.pct_of_share)}</td>
-                <td title={absoluteTime(n.mtime)}>{relativeTime(n.mtime)}</td>
-                <td className="row-actions">
-                  <button
-                    type="button"
-                    className="link"
-                    onClick={(e) => {
-                      e.stopPropagation();
+                  aria-selected={picked}
+                  onClick={(e) => {
+                    if (selectMode) onSelect(n, 'toggle');
+                    else if (e.shiftKey) onSelect(n, 'range');
+                    else if (e.ctrlKey || e.metaKey) onSelect(n, 'toggle');
+                    else onSelect(n, 'replace');
+                  }}
+                  onDoubleClick={() => onReveal(n)}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
                       onReveal(n);
-                    }}
-                  >
-                    Show in tree
-                  </button>
-                  {onMenu && (
+                    } else if (e.key === ' ') {
+                      e.preventDefault();
+                      onSelect(n, 'toggle');
+                    }
+                  }}
+                  onContextMenu={
+                    onMenu &&
+                    ((e) => {
+                      e.preventDefault();
+                      if (!picked) onSelect(n, 'replace');
+                      onMenu(n, e.clientX, e.clientY);
+                    })
+                  }
+                >
+                  {selectMode && (
+                    <td className="check-col">
+                      <span className={`row-check${picked ? ' on' : ''}`} aria-hidden="true">
+                        {picked && <IconCheck />}
+                      </span>
+                    </td>
+                  )}
+                  <td className="mono wrap">{n.path}</td>
+                  <td className="num">{formatBytes(basis === 'allocated' ? n.alloc : n.size)}</td>
+                  <td className="num share-col">{formatPercent(n.pct_of_share)}</td>
+                  <td className="num">{formatPlaytime(n.duration)}</td>
+                  <td className="mtime-col" title={absoluteTime(n.mtime)}>
+                    {relativeTime(n.mtime)}
+                  </td>
+                  <td className="row-actions">
                     <button
                       type="button"
-                      className="icon-button"
-                      aria-label={`Actions for ${n.path}`}
+                      className="link reveal-link"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelect(n);
-                        const r = e.currentTarget.getBoundingClientRect();
-                        onMenu(n, r.left, r.bottom + 2);
+                        onReveal(n);
                       }}
                     >
-                      <IconKebab />
+                      Show in tree
                     </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                    {onMenu && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={`Actions for ${n.path}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!picked) onSelect(n, 'replace');
+                          const r = e.currentTarget.getBoundingClientRect();
+                          onMenu(n, r.left, r.bottom + 2);
+                        }}
+                      >
+                        <IconKebab />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -1,6 +1,14 @@
 import { buildNodeActions, ActionButtons, type ActionContext } from '../actions';
 import type { Basis, Node, ShareInfo } from '../api';
-import { absoluteTime, formatBytes, formatCount, formatPercent } from '../format';
+import {
+  absoluteTime,
+  bytesPerMinute,
+  formatBytes,
+  formatBytesPerMin,
+  formatCount,
+  formatPercent,
+  formatPlaytime,
+} from '../format';
 
 interface Props {
   share: ShareInfo;
@@ -62,6 +70,7 @@ export function SelectionFacts({ selection, basis }: { selection: Node[]; basis:
   const size = selection.reduce((s, n) => s + (basis === 'allocated' ? n.alloc : n.size), 0);
   const files = selection.reduce((s, n) => s + (n.kind === 'dir' ? n.files : 1), 0);
   const dirs = selection.reduce((s, n) => s + (n.kind === 'dir' ? n.dirs + 1 : 0), 0);
+  const playtime = selection.reduce((s, n) => s + (n.duration ?? 0), 0);
   return (
     <div className="detail-main">
       <span className="detail-path">{formatCount(selection.length)} items selected</span>
@@ -70,6 +79,7 @@ export function SelectionFacts({ selection, basis }: { selection: Node[]; basis:
         <span className="muted">
           {formatCount(files)} files · {formatCount(dirs)} folders
         </span>
+        {playtime > 0 && <span className="muted">{formatPlaytime(playtime)} of media</span>}
       </span>
     </div>
   );
@@ -99,6 +109,20 @@ export function NodeFacts({ share, node, basis }: { share: ShareInfo; node: Node
             {formatCount(node.files)} files · {formatCount(node.dirs)} folders
           </span>
         )}
+        {node.duration ? (
+          <span
+            className="muted"
+            title={
+              isDir
+                ? `${formatBytes(node.media_size ?? 0)} of media playing for ${formatPlaytime(node.duration)}`
+                : `Playing time ${formatPlaytime(node.duration)}`
+            }
+          >
+            {formatPlaytime(node.duration)}
+            {' · '}
+            {formatBytesPerMin(bytesPerMinute(node))}
+          </span>
+        ) : null}
         <span className="muted">{formatPercent(node.pct_of_share)} of share</span>
         <span className="muted" title={absoluteTime(node.mtime)}>
           {absoluteTime(node.mtime)}

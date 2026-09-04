@@ -4,6 +4,7 @@ package scan
 
 import (
 	"io/fs"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,6 +33,19 @@ func statEntryAt(fd int, name string, flags int) (rawStat, fs.FileMode, bool, er
 		return rawStat{}, 0, false, err
 	}
 	return fromUnixStat(&st), modeFromRaw(uint32(st.Mode)), true, nil
+}
+
+// openEntry opens name inside the directory open on fd for reading, without
+// following a final symlink, for the media-duration probe. O_NONBLOCK guards
+// against the entry having been swapped for a FIFO between the lstat and the
+// open, which would otherwise block the worker indefinitely; the flag has no
+// effect on the regular file the scanner expects.
+func openEntry(fd int, _, name string) (*os.File, error) {
+	pfd, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(pfd), name), nil
 }
 
 // fromUnixStat converts the x/sys/unix stat used by the fd-relative path.

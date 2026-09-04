@@ -117,9 +117,13 @@ export function DesktopShell(p: ShellProps) {
                 mode={results}
                 scope={view.root}
                 selected={selected}
-                onSelect={(n) => p.selectNode(n, 'replace')}
+                selectedPaths={new Set(selection.map((n) => n.path))}
+                onSelect={p.selectNode}
                 onReveal={p.reveal}
                 onMenu={p.openMenu}
+                selectMode={p.selectMode}
+                onSelectModeChange={p.setSelectMode}
+                onSelectAll={p.selectMany}
                 onClose={() => p.setResults(null)}
               />
             ) : (

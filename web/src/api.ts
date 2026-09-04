@@ -28,6 +28,8 @@ export interface Stats {
   excluded: number;
   errors: number;
   max_depth: number;
+  media_size: number;
+  media_duration: number;
 }
 
 export interface Progress {
@@ -124,6 +126,11 @@ export interface Node {
   files: number;
   dirs: number;
   children: number;
+  /** Media playing time in seconds (aggregate for folders); absent when
+   *  nothing beneath has a known duration. */
+  duration?: number;
+  /** Bytes of media covered by `duration`; equals `size` for a media file. */
+  media_size?: number;
   pct_of_parent: number;
   pct_of_share: number;
 }

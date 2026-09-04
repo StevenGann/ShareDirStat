@@ -34,6 +34,10 @@ scan:
     - "**/lost+found"
   size_basis: apparent           # apparent | allocated
   max_nodes_per_share: 20000000
+  # Read the playing time of audio/video files while crawling (one small
+  # header read per media file) to enable the size-per-minute sort. Turn off
+  # if scans over a slow NAS matter more than the metric.
+  media_durations: true
 
 operations:
   readonly: false                # true disables delete everywhere
@@ -67,6 +71,7 @@ shares:
     schedule: "0 4 * * *"
     excludes: ["**/.cache"]
     size_basis: apparent         # per-share override of scan.size_basis
+    media_durations: true        # per-share override of scan.media_durations
   - id: backups
     name: Backups
     path: /shares/backups

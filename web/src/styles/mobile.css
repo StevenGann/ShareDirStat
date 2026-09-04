@@ -78,11 +78,11 @@
 .tabbar button[aria-current='true'] { color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
 
 .mobile-results {
-  position: fixed; inset: 0; z-index: 15; display: flex;
+  position: fixed; inset: 0; z-index: 15; display: flex; flex-direction: column;
   background: var(--bg);
   padding-bottom: calc(52px + env(safe-area-inset-bottom));
 }
-.mobile-results .results-pane { flex: 1; min-width: 0; }
+.mobile-results .results-pane { flex: 1; min-width: 0; min-height: 0; }
 
 .select-strip {
   flex: none; display: flex; align-items: center; gap: var(--space-4);
@@ -137,4 +137,12 @@
   .version-tag { display: none; }
   .hovercard { max-width: min(320px, 92vw); }
   .banner { margin: var(--space-3) var(--space-4); }
+  /* The results table on a phone keeps Path, Size, Length and the kebab;
+     % of share, the modified column and the "Show in tree" text link go —
+     without them the path column collapses to a sliver and every path
+     wraps letter by letter. */
+  table.results .share-col,
+  table.results .mtime-col,
+  table.results .reveal-link { display: none; }
+  table.results td.wrap { word-break: break-word; }
 }

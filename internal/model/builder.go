@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 )
@@ -43,7 +44,11 @@ type Builder struct {
 	mu    sync.Mutex
 	nodes []Node
 	names []byte
-	errs  []ScanError
+	// durs holds per-node media durations in seconds, index-aligned with
+	// nodes. nil unless CollectMedia was called, so a share scanned without
+	// the feature pays no memory for it.
+	durs []uint32
+	errs []ScanError
 	// errsDropped counts errors beyond the retention cap.
 	errsDropped uint64
 	excluded    uint64
@@ -74,6 +79,17 @@ func NewBuilder(shareID, rootPath string, basis Basis, maxNodes int, sizeHint in
 
 // Root returns the index of the root node (always 0).
 func (b *Builder) Root() uint32 { return 0 }
+
+// CollectMedia enables per-node media durations for this generation. It must
+// be called before the first AddChildren so the duration array stays aligned
+// with the node arena.
+func (b *Builder) CollectMedia() {
+	b.mu.Lock()
+	if b.durs == nil {
+		b.durs = make([]uint32, len(b.nodes), cap(b.nodes))
+	}
+	b.mu.Unlock()
+}
 
 // AddChildren appends the entries of one directory as a contiguous block and
 // links them to their parent. It returns the index of each appended child in
@@ -126,6 +142,9 @@ func (b *Builder) AddChildren(parent uint32, entries []Entry, out []uint32) ([]u
 			Kind:    e.Kind,
 			Flags:   e.Flags,
 		})
+		if b.durs != nil {
+			b.durs = append(b.durs, e.Dur)
+		}
 		out = append(out, first+uint32(i))
 	}
 	p := &b.nodes[parent]
@@ -192,8 +211,9 @@ type GenerationMeta struct {
 func (b *Builder) Finalize(meta GenerationMeta, topN int) *Generation {
 	b.mu.Lock()
 	nodes, names, errs := b.nodes, b.names, b.errs
+	durs := b.durs
 	dropped, excluded := b.errsDropped, b.excluded
-	b.nodes, b.names, b.errs = nil, nil, nil
+	b.nodes, b.names, b.errs, b.durs = nil, nil, nil, nil
 	b.mu.Unlock()
 
 	meta.ShareID = b.shareID
@@ -205,6 +225,7 @@ func (b *Builder) Finalize(meta GenerationMeta, topN int) *Generation {
 		basis:       b.basis,
 		nodes:       nodes,
 		names:       names,
+		durs:        durs,
 		errs:        errs,
 		errsDropped: dropped,
 		scannedAt:   meta.ScannedAt,
@@ -222,6 +243,9 @@ func (b *Builder) Finalize(meta GenerationMeta, topN int) *Generation {
 // reverse pass is enough (§7.2).
 func (g *Generation) aggregate() {
 	var st Stats
+	if g.durs != nil {
+		g.mediaSize = make([]uint64, len(g.nodes))
+	}
 	depth := make([]uint32, len(g.nodes))
 	for i := len(g.nodes) - 1; i >= 0; i-- {
 		n := &g.nodes[i]
@@ -241,6 +265,11 @@ func (g *Generation) aggregate() {
 		if n.Flags.Has(FlagHardlinkDup) {
 			st.HardlinkDups++
 		}
+		// A file with a known playing time counts its whole size as media;
+		// directories accumulate both below, in the same fold as Size.
+		if g.durs != nil && n.Kind != KindDir && g.durs[i] > 0 {
+			g.mediaSize[i] = n.Size
+		}
 		if n.Parent == NoIndex {
 			continue
 		}
@@ -250,6 +279,10 @@ func (g *Generation) aggregate() {
 		if !n.Flags.Has(FlagHardlinkDup) {
 			p.Size += n.Size
 			p.Alloc += n.Alloc
+			if g.durs != nil {
+				g.durs[n.Parent] = addSatU32(g.durs[n.Parent], g.durs[i])
+				g.mediaSize[n.Parent] += g.mediaSize[i]
+			}
 		}
 		if n.Kind == KindDir {
 			p.Dirs += n.Dirs + 1
@@ -275,9 +308,27 @@ func (g *Generation) aggregate() {
 	if len(g.nodes) > 0 {
 		st.Size, st.Alloc = g.nodes[0].Size, g.nodes[0].Alloc
 	}
+	if g.durs != nil {
+		if g.durs[0] == 0 && g.mediaSize[0] == 0 {
+			// The share holds no media at all: drop the arrays so it costs
+			// nothing, exactly as if the feature were off.
+			g.durs, g.mediaSize = nil, nil
+		} else {
+			st.MediaSize, st.MediaDur = g.mediaSize[0], uint64(g.durs[0])
+		}
+	}
 	st.Errors = uint64(len(g.errs)) + g.errsDropped
 	st.Excluded = g.stats.Excluded
 	g.stats = st
+}
+
+// addSatU32 adds durations saturating at the field width, so a share with
+// more than 136 years of media reports the cap rather than wrapping.
+func addSatU32(a, b uint32) uint32 {
+	if s := a + b; s >= a {
+		return s
+	}
+	return math.MaxUint32
 }
 
 // sortChildren orders every directory's children by size descending so that
@@ -294,27 +345,63 @@ func (g *Generation) sortChildren() {
 }
 
 // sortRange sorts one directory's contiguous child block by size descending
-// and repairs the parent index of every grandchild the sort moved.
+// and repairs the parent index of every grandchild the sort moved. The media
+// arrays, when present, are permuted in lockstep with the nodes.
 func (g *Generation) sortRange(lo, hi uint32) {
-	slices.SortFunc(g.nodes[lo:hi], func(a, b Node) int {
-		as, bs := a.Sized(g.basis), b.Sized(g.basis)
-		switch {
-		case as > bs:
-			return -1
-		case as < bs:
-			return 1
-		}
-		// Deterministic tie-break so snapshots round-trip byte for byte.
-		an := g.names[a.NameOff : a.NameOff+uint32(a.NameLen)]
-		bn := g.names[b.NameOff : b.NameOff+uint32(b.NameLen)]
-		return slices.Compare(an, bn)
-	})
+	if g.durs == nil {
+		slices.SortFunc(g.nodes[lo:hi], func(a, b Node) int {
+			as, bs := a.Sized(g.basis), b.Sized(g.basis)
+			switch {
+			case as > bs:
+				return -1
+			case as < bs:
+				return 1
+			}
+			// Deterministic tie-break so snapshots round-trip byte for byte.
+			an := g.names[a.NameOff : a.NameOff+uint32(a.NameLen)]
+			bn := g.names[b.NameOff : b.NameOff+uint32(b.NameLen)]
+			return slices.Compare(an, bn)
+		})
+	} else {
+		sort.Sort(&childSorter{g: g, lo: lo, n: int(hi - lo)})
+	}
 	for j := lo; j < hi; j++ {
 		c := &g.nodes[j]
 		for k := c.FirstChild; k < c.FirstChild+c.ChildCount; k++ {
 			g.nodes[k].Parent = j
 		}
 	}
+}
+
+// childSorter sorts a child block through an interface whose Swap keeps the
+// parallel media arrays aligned with the nodes; slices.SortFunc cannot,
+// because it only ever sees the node slice.
+type childSorter struct {
+	g  *Generation
+	lo uint32
+	n  int
+}
+
+func (s *childSorter) Len() int { return s.n }
+
+func (s *childSorter) Less(i, j int) bool {
+	g := s.g
+	a, b := &g.nodes[s.lo+uint32(i)], &g.nodes[s.lo+uint32(j)] //nolint:gosec // i,j index a child block
+	as, bs := a.Sized(g.basis), b.Sized(g.basis)
+	if as != bs {
+		return as > bs
+	}
+	an := g.names[a.NameOff : a.NameOff+uint32(a.NameLen)]
+	bn := g.names[b.NameOff : b.NameOff+uint32(b.NameLen)]
+	return slices.Compare(an, bn) < 0
+}
+
+func (s *childSorter) Swap(i, j int) {
+	g := s.g
+	ii, jj := s.lo+uint32(i), s.lo+uint32(j) //nolint:gosec // i,j index a child block
+	g.nodes[ii], g.nodes[jj] = g.nodes[jj], g.nodes[ii]
+	g.durs[ii], g.durs[jj] = g.durs[jj], g.durs[ii]
+	g.mediaSize[ii], g.mediaSize[jj] = g.mediaSize[jj], g.mediaSize[ii]
 }
 
 // buildIndexes computes the extension table and the largest-files list.

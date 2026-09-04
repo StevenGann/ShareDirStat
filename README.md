@@ -23,10 +23,17 @@ A three-pane view that will be familiar if you have used WinDirStat:
   rather than exact.
 - **File types** — where the space went by extension, with the same colours
   the treemap uses. Click to highlight that type across the map.
+- **Media durations** — the crawler reads the playing time of audio and video
+  files (MP4/MKV/MP3/FLAC/Opus/WAV and friends) from their headers, so every
+  folder knows how long its media runs and what it costs per minute. Sort by
+  **Length** or **Per minute** to find the bloated encodes; a folder's rate is
+  its total media bytes over its total playing time. One small header read
+  per media file; `scan.media_durations: false` turns it off.
 
-Plus search with size and type filters, a largest-files list, live scan
-progress, and a scan history with the list of paths that could not be read.
-Light and dark themes follow your OS, with a manual override in the header.
+Plus search with size and type filters, a largest-files list with
+multi-select for batch delete and ZIP download, live scan progress, and a
+scan history with the list of paths that could not be read. Light and dark
+themes follow your OS, with a manual override in the header.
 
 On a phone the same app becomes a touch-first layout: Browse, Treemap and
 File types behind a bottom tab bar, a drill-down folder list with thumb-sized

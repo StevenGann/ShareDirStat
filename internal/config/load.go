@@ -38,7 +38,7 @@ type Warning string
 var (
 	shareIDRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	cronParser   = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-	validColumns = map[string]bool{"name": true, "size": true, "pct": true, "alloc": true, "files": true, "dirs": true, "mtime": true, "owner": true, "perms": true, "ext": true, "items": true}
+	validColumns = map[string]bool{"name": true, "size": true, "pct": true, "alloc": true, "files": true, "dirs": true, "mtime": true, "owner": true, "perms": true, "ext": true, "items": true, "duration": true, "spm": true}
 )
 
 // Default returns the built-in defaults (§5.2).
@@ -69,6 +69,7 @@ func Default() *Config {
 			},
 			SizeBasis:        "apparent",
 			MaxNodesPerShare: 20_000_000,
+			MediaDurations:   true,
 		},
 		Operations: Operations{
 			Delete:   DeleteOps{ConfirmMode: "name", Trash: Trash{Retention: Duration(168 * time.Hour)}},
@@ -372,6 +373,10 @@ func normalize(cfg *Config) {
 		}
 		if s.SizeBasis == "" {
 			s.SizeBasis = cfg.Scan.SizeBasis
+		}
+		if s.MediaDurations == nil {
+			v := cfg.Scan.MediaDurations
+			s.MediaDurations = &v
 		}
 		s.Excludes = append(append([]string{}, cfg.Scan.DefaultExcludes...), s.Excludes...)
 	}

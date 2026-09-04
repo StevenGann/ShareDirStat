@@ -17,9 +17,16 @@ type Generation struct {
 	meta  GenerationMeta
 	basis Basis
 
-	mu          sync.RWMutex
-	nodes       []Node
-	names       []byte
+	mu    sync.RWMutex
+	nodes []Node
+	names []byte
+	// durs and mediaSize are index-aligned with nodes and either both nil
+	// (media durations off, or the share holds no media) or both full length:
+	// per-file playing time in seconds and bytes of media with a known time,
+	// aggregated for directories. They live outside Node to keep it at its
+	// packed 64 bytes for shares that have no use for them.
+	durs        []uint32
+	mediaSize   []uint64
 	exts        []ExtStat
 	top         []uint32
 	errs        []ScanError
@@ -184,6 +191,10 @@ func (g *Generation) info(idx uint32) NodeInfo {
 	}
 	if n.Kind != KindDir {
 		ni.Ext = extensionOf(name)
+	}
+	if g.durs != nil {
+		ni.Dur = g.durs[idx]
+		ni.MediaSize = g.mediaSize[idx]
 	}
 	return ni
 }
@@ -355,6 +366,14 @@ func (g *Generation) Remove(path string) (freed, freedAlloc uint64, ok bool) {
 	if n.Flags.Has(FlagHardlinkDup) {
 		freed, freedAlloc = 0, 0
 	}
+	// The node's media contribution mirrors its size contribution: a
+	// hard-link duplicate never added to the aggregates, so it must not
+	// subtract from them either.
+	var mDur uint32
+	var mSize uint64
+	if g.durs != nil && !n.Flags.Has(FlagHardlinkDup) {
+		mDur, mSize = g.durs[idx], g.mediaSize[idx]
+	}
 
 	for p := n.Parent; p != NoIndex; p = g.nodes[p].Parent {
 		a := &g.nodes[p]
@@ -362,6 +381,10 @@ func (g *Generation) Remove(path string) (freed, freedAlloc uint64, ok bool) {
 		a.Alloc -= min(a.Alloc, freedAlloc)
 		a.Files -= min(a.Files, files)
 		a.Dirs -= min(a.Dirs, dirs)
+		if g.durs != nil {
+			g.durs[p] -= min(g.durs[p], mDur)
+			g.mediaSize[p] -= min(g.mediaSize[p], mSize)
+		}
 	}
 	// Tombstone the subtree so listings, resolution and search skip it.
 	g.walk(idx, func(i uint32) bool {
@@ -374,6 +397,8 @@ func (g *Generation) Remove(path string) (freed, freedAlloc uint64, ok bool) {
 	if dirs > 0 {
 		g.stats.Dirs -= min(g.stats.Dirs, uint64(dirs))
 	}
+	g.stats.MediaDur -= min(g.stats.MediaDur, uint64(mDur))
+	g.stats.MediaSize -= min(g.stats.MediaSize, mSize)
 	g.mutation++
 	g.top = nil // rebuilt lazily by Top; the deleted node may have been in it
 	return freed, freedAlloc, true
@@ -412,6 +437,11 @@ func (g *Generation) Splice(path string, sub *Generation) error {
 	target := &g.nodes[idx]
 	oldSize, oldAlloc := target.Size, target.Alloc
 	oldFiles, oldDirs := target.Files, target.Dirs
+	var oldDur uint32
+	var oldMedia uint64
+	if g.durs != nil {
+		oldDur, oldMedia = g.durs[idx], g.mediaSize[idx]
+	}
 
 	// Tombstone whatever is currently below the target.
 	for i := target.FirstChild; i < target.FirstChild+target.ChildCount; i++ {
@@ -425,6 +455,19 @@ func (g *Generation) Splice(path string, sub *Generation) error {
 	nodeBase := uint32(len(g.nodes)) //nolint:gosec // bounded by MaxNodes above
 	nameBase := uint32(len(g.names)) //nolint:gosec // bounded by MaxNameBytes above
 	g.names = append(g.names, sub.names...)
+	// The media arrays follow the arena. A rescan of a media-free subtree
+	// carries none (its builder dropped them), so it splices in as zeros; a
+	// generation without the arrays drops the sub's, and media reappears at
+	// the next full scan.
+	if g.durs != nil {
+		if sub.durs != nil {
+			g.durs = append(g.durs, sub.durs[1:]...)
+			g.mediaSize = append(g.mediaSize, sub.mediaSize[1:]...)
+		} else {
+			g.durs = append(g.durs, make([]uint32, len(sub.nodes)-1)...)
+			g.mediaSize = append(g.mediaSize, make([]uint64, len(sub.nodes)-1)...)
+		}
+	}
 	for j := 1; j < len(sub.nodes); j++ {
 		n := sub.nodes[j]
 		if n.Parent == 0 {
@@ -457,6 +500,15 @@ func (g *Generation) Splice(path string, sub *Generation) error {
 	applyDelta(target.Alloc, oldAlloc, func(d uint64, add bool) { adjust(g, idx, d, add, fieldAlloc) })
 	applyDelta(uint64(target.Files), uint64(oldFiles), func(d uint64, add bool) { adjust(g, idx, d, add, fieldFiles) })
 	applyDelta(uint64(target.Dirs), uint64(oldDirs), func(d uint64, add bool) { adjust(g, idx, d, add, fieldDirs) })
+	if g.durs != nil {
+		if sub.durs != nil {
+			g.durs[idx], g.mediaSize[idx] = sub.durs[0], sub.mediaSize[0]
+		} else {
+			g.durs[idx], g.mediaSize[idx] = 0, 0
+		}
+		applyDelta(uint64(g.durs[idx]), uint64(oldDur), func(d uint64, add bool) { adjust(g, idx, d, add, fieldDur) })
+		applyDelta(g.mediaSize[idx], oldMedia, func(d uint64, add bool) { adjust(g, idx, d, add, fieldMediaSize) })
+	}
 
 	g.errs = append(g.errs, sub.errs...)
 	if len(g.errs) > MaxErrors {
@@ -477,6 +529,8 @@ const (
 	fieldAlloc
 	fieldFiles
 	fieldDirs
+	fieldDur
+	fieldMediaSize
 )
 
 func applyDelta(newV, oldV uint64, fn func(uint64, bool)) {
@@ -503,6 +557,10 @@ func adjust(g *Generation, from uint32, delta uint64, add bool, f aggField) {
 			n.Files = clampU32(addSub(uint64(n.Files), delta, add))
 		case fieldDirs:
 			n.Dirs = clampU32(addSub(uint64(n.Dirs), delta, add))
+		case fieldDur:
+			g.durs[p] = clampU32(addSub(uint64(g.durs[p]), delta, add))
+		case fieldMediaSize:
+			g.mediaSize[p] = addSub(g.mediaSize[p], delta, add)
 		}
 	}
 }
@@ -569,6 +627,9 @@ func (g *Generation) recomputeStats() {
 		st.Dirs--
 	}
 	st.Size, st.Alloc = g.nodes[0].Size, g.nodes[0].Alloc
+	if g.durs != nil {
+		st.MediaSize, st.MediaDur = g.mediaSize[0], uint64(g.durs[0])
+	}
 	st.Errors = uint64(len(g.errs)) + g.errsDropped
 	st.Excluded = g.stats.Excluded
 	st.MaxDepth = g.stats.MaxDepth
@@ -579,10 +640,13 @@ func (g *Generation) recomputeStats() {
 // arrays so the snapshot package can encode them without copying; callers
 // must treat every slice as read-only.
 type Raw struct {
-	Meta          GenerationMeta
-	Basis         Basis
-	Nodes         []Node
-	Names         []byte
+	Meta  GenerationMeta
+	Basis Basis
+	Nodes []Node
+	Names []byte
+	// Durs and MediaSizes are either both nil or both len(Nodes) (§8.1).
+	Durs          []uint32
+	MediaSizes    []uint64
 	Exts          []ExtStat
 	Top           []uint32
 	Errors        []ScanError
@@ -600,6 +664,8 @@ func (g *Generation) Export() Raw {
 		Basis:         g.basis,
 		Nodes:         g.nodes,
 		Names:         g.names,
+		Durs:          g.durs,
+		MediaSizes:    g.mediaSize,
 		Exts:          g.exts,
 		Top:           g.top,
 		Errors:        g.errs,
@@ -617,6 +683,8 @@ func FromRaw(r Raw) *Generation {
 		basis:       r.Basis,
 		nodes:       r.Nodes,
 		names:       r.Names,
+		durs:        r.Durs,
+		mediaSize:   r.MediaSizes,
 		exts:        r.Exts,
 		top:         r.Top,
 		errs:        r.Errors,

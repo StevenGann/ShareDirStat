@@ -204,6 +204,9 @@ table.results td { padding: 2px 8px; border-bottom: 1px solid var(--border); whi
 table.results td.wrap { white-space: normal; }
 table.results tbody tr:hover { background: var(--surface-alt); }
 table.results tbody tr.selected { background: var(--accent-soft); }
+table.results tbody tr.focused td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+table.results .check-col { width: 30px; padding-right: 0; }
+table.results .check-col .row-check { margin: 0; }
 
 /* ---- detail bar ---------------------------------------------------------- */
 

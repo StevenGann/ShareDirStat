@@ -1,6 +1,13 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Basis, type Node } from '../api';
-import { formatBytes, formatCount, formatPercent } from '../format';
+import {
+  bytesPerMinute,
+  formatBytes,
+  formatBytesPerMin,
+  formatCount,
+  formatPercent,
+  formatPlaytime,
+} from '../format';
 import { useAsyncData, useElementSize, useLongPress, useNow } from '../hooks';
 import { useResolvedDark } from '../theme';
 import { IconClose, IconZoomIn, IconZoomOut } from './icons';
@@ -431,6 +438,11 @@ function CardFacts({ cell, basis }: { cell: Cell; basis: Basis }) {
           {formatCount(node.files)} files · {formatCount(node.dirs)} folders
         </div>
       )}
+      {node.duration ? (
+        <div className="muted">
+          {formatPlaytime(node.duration)} · {formatBytesPerMin(bytesPerMinute(node))}
+        </div>
+      ) : null}
     </>
   );
 }

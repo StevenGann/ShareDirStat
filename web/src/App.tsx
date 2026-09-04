@@ -261,6 +261,17 @@ export default function App() {
     [],
   );
 
+  /** Bulk add for "Select all shown": one state write, focus stays put. */
+  const selectMany = useCallback((nodes: Node[]) => {
+    if (nodes.length === 0) return;
+    setSelection((prev) => {
+      const have = new Set(prev.map((n) => n.path));
+      const add = nodes.filter((n) => !have.has(n.path));
+      return add.length > 0 ? [...prev, ...add] : prev;
+    });
+    setSelected((prev) => prev ?? nodes[0] ?? null);
+  }, []);
+
   const zoom = useCallback((path: string) => {
     setView((v) => ({ ...v, root: path }));
   }, []);
@@ -294,6 +305,27 @@ export default function App() {
       selectNode(node, 'replace');
     },
     [expanded, selectNode],
+  );
+
+  /**
+   * Reveals a path that only exists as a string, e.g. an unreadable path
+   * from the scan-errors drawer. Resolved through the API because the tree
+   * needs a Node to select; a path missing from the current results (it may
+   * have been deleted since the scan) is reported rather than ignored.
+   */
+  const revealPath = useCallback(
+    async (path: string) => {
+      if (!current?.generation) return;
+      const shareId = current.id;
+      try {
+        const res = await api.node(shareId, path, basis);
+        setDrawer(false);
+        reveal(res.node);
+      } catch {
+        setNotice(`${path} is not in the current results — it may have been removed since the scan.`);
+      }
+    },
+    [current, basis, reveal],
   );
 
   /** After a delete the selection is stale and the results have moved on. */
@@ -351,7 +383,8 @@ export default function App() {
     [],
   );
 
-  // Global shortcuts: '/' opens search, Escape leaves it (FR-UI-07).
+  // Global shortcuts: '/' opens search, Escape leaves it, Ctrl/Cmd+C copies
+  // the selected path (FR-UI-07).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -363,6 +396,16 @@ export default function App() {
       } else if (e.key === 'Delete' && !typing && selection.length > 0 && !current?.delete_blocked) {
         e.preventDefault();
         setDeleting(selection);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !typing && selected && current) {
+        // Only when no text is highlighted: copying prose the user swept up
+        // must keep working, the shortcut fills the empty-copy case.
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) {
+          e.preventDefault();
+          const full = selected.path === '' ? current.path : `${current.path}/${selected.path}`;
+          void navigator.clipboard?.writeText(full);
+          setNotice(`Copied ${full}`);
+        }
       } else if (e.key === 'Escape' && results) {
         setResults(null);
       } else if (e.key === 'Escape' && selectMode) {
@@ -371,7 +414,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [results, selection, current?.delete_blocked, selectMode]);
+  }, [results, selection, selected, current, selectMode]);
 
   // --- render -------------------------------------------------------------
 
@@ -405,6 +448,7 @@ export default function App() {
         onCancelScan: () => void cancelScan(),
         onPauseToggle: () => void pauseToggle(),
         selectNode,
+        selectMany,
         zoom,
         reveal,
         setResults,
@@ -508,6 +552,7 @@ export default function App() {
             <ScanDrawer
               shareId={current.id}
               generation={current.generation}
+              onReveal={phone ? undefined : (path) => void revealPath(path)}
               onClose={() => setDrawer(false)}
             />
           )}

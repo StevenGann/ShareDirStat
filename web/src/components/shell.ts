@@ -41,6 +41,8 @@ export interface ShellProps {
   onPauseToggle: () => void;
 
   selectNode: (node: Node, mode?: 'replace' | 'toggle' | 'range') => void;
+  /** Adds many nodes to the selection at once, without moving the focus. */
+  selectMany: (nodes: Node[]) => void;
   zoom: (path: string) => void;
   reveal: (node: Node) => void;
   setResults: (r: ResultsMode | null) => void;

@@ -19,6 +19,13 @@ func statEntry(_ int, dir, name string) (rawStat, fs.FileMode, bool, error) {
 	return fromFileInfo(os.Stat(filepath.Join(dir, name)))
 }
 
+// openEntry opens name for the media-duration probe. Without the *at
+// syscalls there is no O_NOFOLLOW-relative open; the probe only reads, so a
+// racing symlink swap costs a stray read, not an escape.
+func openEntry(_ int, dir, name string) (*os.File, error) {
+	return os.Open(filepath.Join(dir, name))
+}
+
 func fromFileInfo(fi fs.FileInfo, err error) (rawStat, fs.FileMode, bool, error) {
 	if err != nil {
 		return rawStat{}, 0, false, err

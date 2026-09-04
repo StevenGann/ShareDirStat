@@ -392,6 +392,7 @@ func (m *Manager) run(ctx context.Context, sh *share.Share, rs *runningScan, abs
 		Excludes:         sh.Config.Excludes,
 		FollowSymlinks:   m.cfg.Scan.FollowSymlinks,
 		CrossMountPoints: m.cfg.Scan.CrossMountPoints,
+		MediaDurations:   sh.Config.ProbeMediaDurations(),
 		MaxNodes:         m.cfg.Scan.MaxNodesPerShare,
 		SizeHint:         sizeHint,
 		OnProgress: func(p Progress) {

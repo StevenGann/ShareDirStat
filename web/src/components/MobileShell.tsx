@@ -38,6 +38,46 @@ export function MobileShell(p: ShellProps) {
 
   const exitSelect = useCallback(() => p.setSelectMode(false), [p]);
 
+  // The strip must live inside the results overlay while results are open:
+  // the overlay is fixed and full-height, so a strip in the shell's own flow
+  // would be painted over exactly when a "select all results, delete" flow
+  // needs it.
+  const selectStrip = p.selectMode && (
+    <div className="select-strip" role="toolbar" aria-label="Selection actions">
+      <span className="select-count">{p.selection.length} selected</span>
+      <span className="spacer" />
+      {buildNodeActions(current, p.selection, {
+        busy: p.busy,
+        onDelete: p.requestDelete,
+        onZoom: zoomTo,
+        onLargestHere: (path) => p.setResults({ kind: 'largest', path }),
+        onRescan: (path) => p.onScan(path),
+      })
+        .filter((it) => it.id === 'zip' || it.id === 'delete')
+        .map((it) =>
+          it.href && !it.disabled ? (
+            <a key={it.id} className="button" href={it.href} title={it.title}>
+              {it.label}
+            </a>
+          ) : (
+            <button
+              key={it.id}
+              type="button"
+              className={it.danger ? 'danger' : undefined}
+              disabled={it.disabled || p.selection.length === 0}
+              title={it.title}
+              onClick={it.run}
+            >
+              {it.label}
+            </button>
+          ),
+        )}
+      <button type="button" onClick={exitSelect}>
+        Done
+      </button>
+    </div>
+  );
+
   return (
     <div className="mobile-shell">
       <MobileHeader
@@ -119,7 +159,8 @@ export function MobileShell(p: ShellProps) {
             mode={p.results}
             scope={p.view.root}
             selected={p.selected}
-            onSelect={(n) => p.selectNode(n, 'replace')}
+            selectedPaths={new Set(p.selection.map((n) => n.path))}
+            onSelect={p.selectNode}
             onReveal={(n) => {
               // There is no tree to reveal into: go to the folder instead.
               p.selectNode(n, 'replace');
@@ -128,48 +169,16 @@ export function MobileShell(p: ShellProps) {
               p.setResults(null);
             }}
             onMenu={p.openMenu}
+            selectMode={p.selectMode}
+            onSelectModeChange={p.setSelectMode}
+            onSelectAll={p.selectMany}
             onClose={() => p.setResults(null)}
           />
+          {selectStrip}
         </div>
       )}
 
-      {p.selectMode && (
-        <div className="select-strip" role="toolbar" aria-label="Selection actions">
-          <span className="select-count">
-            {p.selection.length} selected
-          </span>
-          <span className="spacer" />
-          {buildNodeActions(current, p.selection, {
-            busy: p.busy,
-            onDelete: p.requestDelete,
-            onZoom: zoomTo,
-            onLargestHere: (path) => p.setResults({ kind: 'largest', path }),
-            onRescan: (path) => p.onScan(path),
-          })
-            .filter((it) => it.id === 'zip' || it.id === 'delete')
-            .map((it) =>
-              it.href && !it.disabled ? (
-                <a key={it.id} className="button" href={it.href} title={it.title}>
-                  {it.label}
-                </a>
-              ) : (
-                <button
-                  key={it.id}
-                  type="button"
-                  className={it.danger ? 'danger' : undefined}
-                  disabled={it.disabled || p.selection.length === 0}
-                  title={it.title}
-                  onClick={it.run}
-                >
-                  {it.label}
-                </button>
-              ),
-            )}
-          <button type="button" onClick={exitSelect}>
-            Done
-          </button>
-        </div>
-      )}
+      {!p.results && selectStrip}
 
       <TabBar tab={tab} onChange={setTab} />
 

@@ -73,14 +73,20 @@ func (s *Store) Save(g *model.Generation) (int64, error) {
 		_ = os.Remove(tmpName) // no-op once the rename has succeeded
 	}()
 
-	if err := writeHeader(tmp, h, flagZstd); err != nil {
+	// A generation without media arrays is written in the older layout, so
+	// shares that never grew them keep snapshots an older binary can read.
+	ver := minFormatVersion
+	if raw.Durs != nil {
+		ver = FormatVersion
+	}
+	if err := writeHeader(tmp, h, flagZstd, ver); err != nil {
 		return 0, fmt.Errorf("write snapshot header: %w", err)
 	}
 	zw, err := zstd.NewWriter(tmp, zstd.WithEncoderLevel(CompressionLevel))
 	if err != nil {
 		return 0, err
 	}
-	if err := writePayload(zw, raw); err != nil {
+	if err := writePayload(zw, raw, ver); err != nil {
 		_ = zw.Close()
 		return 0, fmt.Errorf("write snapshot payload: %w", err)
 	}
@@ -124,7 +130,7 @@ func (s *Store) Load(shareID string) (*model.Generation, *Header, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	h, flags, err := readHeader(f)
+	h, flags, ver, err := readHeader(f)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -137,7 +143,7 @@ func (s *Store) Load(shareID string) (*model.Generation, *Header, error) {
 		defer zr.Close()
 		r = zr
 	}
-	raw, err := readPayload(r, h)
+	raw, err := readPayload(r, h, ver)
 	if err != nil {
 		return nil, &h, err
 	}

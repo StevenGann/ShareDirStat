@@ -7,11 +7,13 @@ import { useModalBehavior } from './useModalBehavior';
 interface Props {
   shareId: string;
   generation: string | null;
+  /** Expands the tree to an unreadable path and closes the drawer (FR-UI-20). */
+  onReveal?: (path: string) => void;
   onClose: () => void;
 }
 
 /** Scan history and the error list of the current results (FR-UI-20). */
-export function ScanDrawer({ shareId, generation, onClose }: Props) {
+export function ScanDrawer({ shareId, generation, onReveal, onClose }: Props) {
   const drawerRef = useRef<HTMLElement | null>(null);
   const { onKeyDown } = useModalBehavior(drawerRef, { onClose });
   const [scans, setScans] = useState<ScanRecord[]>([]);
@@ -125,7 +127,17 @@ export function ScanDrawer({ shareId, generation, onClose }: Props) {
           <tbody>
             {errors.map((e, i) => (
               <tr key={`${e.path}-${i}`}>
-                <td className="mono wrap">{e.path}</td>
+                <td className="mono wrap">
+                  {e.path}
+                  {onReveal && e.path && (
+                    <>
+                      {' '}
+                      <button type="button" className="link" onClick={() => onReveal(e.path)}>
+                        Show in tree
+                      </button>
+                    </>
+                  )}
+                </td>
                 <td>{e.op}</td>
                 <td>
                   {e.errno && <code>{e.errno}</code>} <span className="muted">{e.message}</span>

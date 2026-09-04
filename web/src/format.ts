@@ -76,6 +76,33 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+/** Formats a media playing time in seconds the way players do: "4:05",
+ *  "1:42:05", and for the very long aggregates "3d 07h". */
+export function formatPlaytime(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return '—';
+  const s = Math.round(seconds);
+  if (s >= 172800) {
+    const h = Math.round((s % 86400) / 3600);
+    return `${Math.floor(s / 86400)}d ${String(h).padStart(2, '0')}h`;
+  }
+  const two = (n: number) => String(n).padStart(2, '0');
+  if (s >= 3600) return `${Math.floor(s / 3600)}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}`;
+  return `${Math.floor(s / 60)}:${two(s % 60)}`;
+}
+
+/** Media bytes per minute of playing time: the "which encode is fat" metric.
+ *  Undefined when the node has no media with a known duration. */
+export function bytesPerMinute(node: { duration?: number; media_size?: number }): number | undefined {
+  if (!node.duration || !node.media_size) return undefined;
+  return (node.media_size * 60) / node.duration;
+}
+
+/** Formats a size-per-minute rate, e.g. "34.2 MiB/min". */
+export function formatBytesPerMin(rate: number | undefined): string {
+  if (rate === undefined || !Number.isFinite(rate) || rate <= 0) return '—';
+  return `${formatBytes(rate)}/min`;
+}
+
 /** Formats a scan rate. */
 export function formatRate(filesPerSecond: number): string {
   if (!Number.isFinite(filesPerSecond) || filesPerSecond <= 0) return '—';

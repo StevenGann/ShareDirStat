@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type Basis, type Node, type ShareInfo } from '../api';
-import { absoluteTime, formatBytes, formatCount, formatPercent, relativeTime } from '../format';
+import {
+  absoluteTime,
+  bytesPerMinute,
+  formatBytes,
+  formatBytesPerMin,
+  formatCount,
+  formatPercent,
+  formatPlaytime,
+  relativeTime,
+} from '../format';
 import { useLongPress, usePointerCoarse } from '../hooks';
 import { IconCheck, IconChevron } from './icons';
 
@@ -14,7 +23,7 @@ const OVERSCAN = 8;
 /** Children fetched per directory; the server caps this at 5000. */
 const PAGE = 500;
 
-export type SortField = 'size' | 'name' | 'mtime' | 'files';
+export type SortField = 'size' | 'name' | 'mtime' | 'files' | 'duration' | 'spm';
 
 export interface ColumnDef {
   key: string;
@@ -33,6 +42,8 @@ export const COLUMNS: ColumnDef[] = [
   { key: 'files', label: 'Files', width: '78px', numeric: true, sort: 'files' },
   { key: 'dirs', label: 'Folders', width: '78px', numeric: true },
   { key: 'items', label: 'Items', width: '78px', numeric: true },
+  { key: 'duration', label: 'Length', width: '88px', numeric: true, sort: 'duration' },
+  { key: 'spm', label: 'Per minute', width: '112px', numeric: true, sort: 'spm' },
   { key: 'mtime', label: 'Modified', width: '124px', sort: 'mtime' },
   { key: 'owner', label: 'Owner', width: '132px' },
   { key: 'perms', label: 'Permissions', width: '104px' },
@@ -160,6 +171,44 @@ export function Tree({
       void load(path).finally(() => inFlight.current.delete(token));
     }
   }, [share.generation, expanded, entries, cacheKey, load]);
+
+  // Fetches the next page of a directory that has more children than are
+  // loaded (FR-UI-06). Pages append; the natural size order is stable across
+  // pages, so the rows never reshuffle.
+  const loadMore = useCallback(
+    async (path: string) => {
+      const entry = entries[path];
+      if (!entry || entry.children.length >= entry.total) return;
+      const token = `${cacheKey}|${path}|more`;
+      if (inFlight.current.has(token)) return;
+      inFlight.current.add(token);
+      try {
+        const res = await api.tree(share.id, path, {
+          basis,
+          sort,
+          order: desc ? 'desc' : 'asc',
+          limit: PAGE,
+          offset: entry.children.length,
+        });
+        setCache((prev) => {
+          const cur = prev.key === cacheKey ? prev.entries[path] : undefined;
+          if (!cur) return prev;
+          return {
+            ...prev,
+            entries: {
+              ...prev.entries,
+              [path]: { children: [...cur.children, ...res.children], total: res.total },
+            },
+          };
+        });
+      } catch {
+        /* the footer keeps the button; the next click retries */
+      } finally {
+        inFlight.current.delete(token);
+      }
+    },
+    [entries, cacheKey, share.id, basis, sort, desc],
+  );
 
   const toggle = useCallback(
     (node: Node) => {
@@ -381,7 +430,11 @@ export function Tree({
           {truncations.map(([path, e]) => (
             <div key={path}>
               {path === '' ? 'Share root' : path}: showing the largest {formatCount(e.children.length)} of{' '}
-              {formatCount(e.total)} entries — use search to narrow.
+              {formatCount(e.total)} entries.{' '}
+              <button type="button" className="link" onClick={() => void loadMore(path)}>
+                Load {formatCount(Math.min(PAGE, e.total - e.children.length))} more
+              </button>{' '}
+              or search to narrow.
             </div>
           ))}
         </div>
@@ -484,6 +537,10 @@ function TreeRow({
         return isDir ? formatCount(node.dirs) : '';
       case 'items':
         return isDir ? formatCount(node.files + node.dirs) : '';
+      case 'duration':
+        return formatPlaytime(node.duration);
+      case 'spm':
+        return formatBytesPerMin(bytesPerMinute(node));
       case 'owner':
         return `${node.owner ?? node.uid}:${node.group ?? node.gid}`;
       case 'perms':

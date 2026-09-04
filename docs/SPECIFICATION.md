@@ -226,6 +226,7 @@ scan:
     - "**/lost+found"
   size_basis: apparent       # apparent | allocated — default for aggregates & UI
   max_nodes_per_share: 20000000   # scan aborts with a clear error above this (memory guard)
+  media_durations: true      # probe audio/video playing time while crawling (§7.10)
 
 operations:
   readonly: false            # global kill-switch for delete (overrides per-share allow_delete)
@@ -255,6 +256,7 @@ shares:
     schedule: "0 4 * * *"    # override scan.default_schedule
     excludes: ["**/.cache"]  # appended to default_excludes
     size_basis: allocated    # override scan.size_basis
+    media_durations: true    # override scan.media_durations
   - id: backups
     name: "Backups"
     path: /shares/backups
@@ -405,6 +407,26 @@ Default is 4, which is safe on all of the above.
 
 `FR-SCAN-22` (MUST) `scan.on_startup: if-missing` scans only shares with no loadable snapshot; `always` scans every share sequentially after loading snapshots; `never` waits for manual/scheduled triggers.
 
+### 7.9a Media durations (added post-M4)
+
+`FR-SCAN-25` (MUST) When `scan.media_durations` is true (the default;
+per-share override `media_durations`), the crawl reads the playing time of
+audio and video files whose extension the prober understands (MP4/MOV family,
+Matroska/WebM, MP3, FLAC, Ogg/Opus, WAV, AIFF, AVI, ASF/WMA, ADTS AAC). The
+probe opens the file relative to the already-open directory descriptor
+(`O_NOFOLLOW`) and reads a small bounded number of header regions — never the
+file body — so the cost is a few extra reads per media file and zero for
+everything else. Durations are stored per node in seconds and aggregated for
+directories together with the bytes of media behind them (hard links counted
+once, §7.6), which yields the **size-per-minute** metric (`sort=spm`,
+`sort=duration` in §9.3): for a folder, total media bytes divided by total
+playing time. A file whose duration cannot be determined (corrupt, truncated,
+unreadable, unsupported codec inside a known container) is silently treated
+as non-media: its size is still correct, and recording probe failures as scan
+errors would mark ancestors `partial` and drown real I/O failures. Duplicate
+hard links are not probed. Aggregate seconds saturate at 2^32−1 (≈136 years)
+rather than wrapping.
+
 ### 7.9 Free-space reporting (post-1.0 — design note only)
 
 **Not in 1.0.** No requirement in this document depends on it; nothing in the 1.0 API, UI or metrics exposes volume statistics. The note below is kept so the later feature is designed with the right caveats.
@@ -439,6 +461,12 @@ The model is optimised for millions of nodes on a small machine. It is an implem
 | `uid`, `gid` | u32, u32 | MAY be interned to u16 table |
 | `ino` | u64 | kept for hard-link dedupe; MAY be dropped after finalize to save 8 B |
 
+- Media durations (`FR-SCAN-25`) live in two parallel arrays index-aligned
+  with the node slice — `durs []uint32` (seconds) and `mediaSize []uint64` —
+  rather than in `Node`, which stays at its packed 64 bytes. The arrays exist
+  only when the feature is on **and** the share contains media (+12 B/node
+  then, still within NFR-3); child sorting permutes them in lockstep with the
+  nodes.
 - Derived indexes built at finalize:
   - **Extension table**: `ext → {files, size, alloc}` for the whole share (ext = lowercase text after the last `.` in a file name, max 16 chars, "" for none; names starting with `.` and containing no other dot have ext ""). Sorted by size desc.
   - **Top files**: the 1 000 largest files (by configured basis) as node indices.
@@ -495,6 +523,8 @@ Small structured records (JSON) kept in `/data/state/<share-id>.json`: scan hist
   "mode": "0644",
   "uid": 1000, "gid": 1000,
   "ext": "mkv",
+  "duration": 7112,
+  "media_size": 4831838208,
   "flags": { "partial": false, "mountpoint": false, "hardlink_dup": false },
   "files": 0, "dirs": 0,
   "pct_of_parent": 0.31,
@@ -502,7 +532,7 @@ Small structured records (JSON) kept in `/data/state/<share-id>.json`: scan hist
 }
 ```
 
-Directories additionally have `files`, `dirs` (aggregate counts) and, when requested, `children`.
+Directories additionally have `files`, `dirs` (aggregate counts) and, when requested, `children`. `duration` (seconds of playing time; aggregate beneath a directory) and `media_size` (the bytes behind that time) appear only when something beneath the node has a known duration (`FR-SCAN-25`).
 
 ### 9.3 Endpoints
 
@@ -510,7 +540,7 @@ Directories additionally have `files`, `dirs` (aggregate counts) and, when reque
 |---|---|---|
 | GET | `/shares` | List shares with state, generation info, last scan summary, next scheduled scan time, capabilities (`allow_delete`, `allow_download`). |
 | GET | `/shares/{id}` | Single share, same shape. |
-| GET | `/shares/{id}/tree?path=&depth=1&limit=&offset=&sort=size&order=desc` | Node at `path` with children (`depth` 1–3; deeper levels are truncated to the largest `limit` children per directory). `sort` ∈ `size`, `name`, `mtime`, `files`. |
+| GET | `/shares/{id}/tree?path=&depth=1&limit=&offset=&sort=size&order=desc` | Node at `path` with children (`depth` 1–3; deeper levels are truncated to the largest `limit` children per directory). `sort` ∈ `size`, `name`, `mtime`, `files`, `duration`, `spm` (media bytes per minute of playing time; entries without media sort last). |
 | GET | `/shares/{id}/node?path=` | Single node without children, plus `ancestors` array (breadcrumb). |
 | GET | `/shares/{id}/treemap?path=&min_fraction=0.0005&max_nodes=10000&max_depth=8` | Nested subtree pruned for rendering: descend until a node's size < `min_fraction × root size` or limits hit; each pruned directory carries `truncated: {children: n, size: bytes}` so the client can draw an "other" cell. |
 | GET | `/shares/{id}/top?n=100&kind=file` | Largest `n` files (or dirs) in the share or beneath `path`. `n` ≤ 1 000. |
@@ -594,7 +624,7 @@ The UI deliberately mirrors WinDirStat's three-pane arrangement because that is 
 
 ### 10.2 Tree pane
 
-`FR-UI-05` (MUST) Available columns: **Name** (kind icon, expand chevron), **Size** (configured basis), **%** of parent (inline bar), **Allocated** (the other basis), **Files**, **Subdirs**, **Last modified**, **Owner** (`user:group`), **Permissions** (`drwxr-x---` style, with octal in tooltip), **Extension**, **Items** (files + dirs). Default visible set: Name, Size, %, Files, Subdirs, Last modified, Owner; the rest are enabled through a column chooser in the header's context menu. Every column is sortable (default Size desc); column set, order and widths persist in `localStorage`. Column set can be pre-configured with `ui.columns`.
+`FR-UI-05` (MUST) Available columns: **Name** (kind icon, expand chevron), **Size** (configured basis), **%** of parent (inline bar), **Allocated** (the other basis), **Files**, **Subdirs**, **Last modified**, **Owner** (`user:group`), **Permissions** (`drwxr-x---` style, with octal in tooltip), **Extension**, **Items** (files + dirs), **Length** (media playing time, `FR-SCAN-25`), **Per minute** (media bytes per minute of playing time). Default visible set: Name, Size, %, Files, Subdirs, Last modified, Owner; the rest are enabled through a column chooser in the header's context menu. Every column is sortable (default Size desc); column set, order and widths persist in `localStorage`. Column set can be pre-configured with `ui.columns`.
 
 `FR-UI-05a` (MUST) Owner names: uid/gid are resolved to names using `/etc/passwd` and `/etc/group` as seen inside the container (operators may bind-mount the host's or the NAS's files read-only), then `ui.owner_names`/`ui.group_names` overrides; unresolved ids display numerically (`1000:1000`). Resolution happens server-side at finalize time into a small id→name table shipped with `/shares/{id}`, so the tree API returns numeric ids only.
 
@@ -1060,10 +1090,39 @@ rule that the delete dialog accumulated bug-by-bug now live in one
 sheets, and focus returns to the opener on close.
 
 **Still not implemented, deliberately.** The redesign did not pick up the
-open `FR-UI` gaps that are orthogonal to layout: "load more" beyond the tree
-page (`FR-UI-06`), Ctrl/Cmd+C copy-path (`FR-UI-07`), reveal-in-tree from
-the scan-errors drawer (`FR-UI-20`), the search date range (`FR-UI-22`),
-the message catalogue (`FR-UI-27`), and the Playwright suite (§15.3).
+open `FR-UI` gaps that are orthogonal to layout. The 2026-09 pass (§16.6)
+closed "load more" beyond the tree page (`FR-UI-06`), Ctrl/Cmd+C copy-path
+(`FR-UI-07`) and reveal-in-tree from the scan-errors drawer (`FR-UI-20`);
+still open: the search date range (`FR-UI-22`), the message catalogue
+(`FR-UI-27`), and the Playwright suite (§15.3).
+
+### 16.6 Media durations and list multi-select (2026-09)
+
+**Results lists select like the tree.** The search and largest-files list
+had only single selection, which made "delete the twenty fattest files" a
+twenty-round trip. The list now takes the tree's whole selection contract —
+Ctrl/Cmd-click toggles, Shift-click adds, a Select toggle with per-row
+checkboxes for touch, and "Select all shown" — feeding the same selection
+state, so the detail bar, ZIP download and delete dialog needed no changes.
+"Select all shown" adds in one state write through a dedicated `selectMany`
+rather than five hundred toggles, each of which would also move the focused
+node and rewrite the URL.
+
+**Size per minute ranks encodes, not files.** `sort=spm` orders by media
+bytes per minute of playing time (`FR-SCAN-25`); entries without media rank
+last rather than as zero, so a duration sort never interleaves documents
+with short clips. The metric always uses apparent bytes: keeping a second
+aggregate per basis would double the arrays' memory for a distinction that
+is noise at media sizes.
+
+**Probing rides the crawl.** The prober opens each media file relative to
+the directory descriptor the scanner already holds (`O_NOFOLLOW`,
+`O_NONBLOCK`, re-checked regular through the open fd), reads a bounded set
+of header regions, and treats every failure as "not media". The extra opens
+cost roughly nothing locally; on a latency-bound NAS they are amortised by
+the same worker parallelism that hides stat latency, and
+`scan.media_durations: false` (or the per-share override) removes them
+entirely.
 
 ---
 
@@ -1177,7 +1236,7 @@ The client draws `truncated` as a hatched cell so area is still conserved (the r
 |---|---|---|---|
 | Config | CFG-01, 02, 05, 06 | CFG-03 | CFG-04 |
 | Shares | SHR-01–05 | SHR-06 | — |
-| Scan | SCAN-00, 01–09, 13–17, 17a, 19–22, 24 | SCAN-10, 18 | SCAN-11, 12 |
+| Scan | SCAN-00, 01–09, 13–17, 17a, 19–22, 24, 25 | SCAN-10, 18 | SCAN-11, 12 |
 | Data | DATA-01, 02, 04, 05 | DATA-03 | — |
 | API | API-01 | — | — |
 | UI | UI-01–08 (+05a), 11–16, 18–26 | UI-09, 10, 27 | — |

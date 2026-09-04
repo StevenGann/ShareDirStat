@@ -291,7 +291,7 @@ func TestReadPayloadRefusesImplausibleLengths(t *testing.T) {
 					t.Fatalf("panicked instead of returning an error: %v", r)
 				}
 			}()
-			if _, err := readPayload(strings.NewReader(string(tc.payload)), tc.header); err == nil {
+			if _, err := readPayload(strings.NewReader(string(tc.payload)), tc.header, FormatVersion); err == nil {
 				t.Fatal("want an error, got nil")
 			} else if !errors.Is(err, ErrCorrupt) {
 				t.Fatalf("want ErrCorrupt, got %v", err)

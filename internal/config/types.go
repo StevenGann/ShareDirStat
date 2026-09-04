@@ -58,6 +58,11 @@ type Scan struct {
 	DefaultExcludes     []string `yaml:"default_excludes"`
 	SizeBasis           string   `yaml:"size_basis"`
 	MaxNodesPerShare    int      `yaml:"max_nodes_per_share"`
+	// MediaDurations reads the playing time of audio and video files during
+	// the crawl (a bounded header read per media file), enabling the
+	// size-per-minute metric. Default true; turn off to spare a slow NAS the
+	// extra opens.
+	MediaDurations bool `yaml:"media_durations"`
 }
 
 // Operations holds delete/download settings.
@@ -97,15 +102,16 @@ type Discovery struct {
 
 // Share is one configured storage location (§6).
 type Share struct {
-	ID            string   `yaml:"id"`
-	Name          string   `yaml:"name"`
-	Path          string   `yaml:"path"`
-	AllowDelete   *bool    `yaml:"allow_delete"`
-	AllowDownload *bool    `yaml:"allow_download"`
-	Concurrency   int      `yaml:"concurrency"`
-	Schedule      *string  `yaml:"schedule"`
-	Excludes      []string `yaml:"excludes"`
-	SizeBasis     string   `yaml:"size_basis"`
+	ID             string   `yaml:"id"`
+	Name           string   `yaml:"name"`
+	Path           string   `yaml:"path"`
+	AllowDelete    *bool    `yaml:"allow_delete"`
+	AllowDownload  *bool    `yaml:"allow_download"`
+	Concurrency    int      `yaml:"concurrency"`
+	Schedule       *string  `yaml:"schedule"`
+	Excludes       []string `yaml:"excludes"`
+	SizeBasis      string   `yaml:"size_basis"`
+	MediaDurations *bool    `yaml:"media_durations"`
 
 	// Discovered is true when the share came from auto-discovery.
 	Discovered bool `yaml:"-"`
@@ -117,6 +123,11 @@ func (s Share) CanDelete() bool { return s.AllowDelete != nil && *s.AllowDelete 
 
 // CanDownload reports whether download is permitted for the share.
 func (s Share) CanDownload() bool { return s.AllowDownload != nil && *s.AllowDownload }
+
+// ProbeMediaDurations reports whether the crawl should read media playing
+// times for the share. The pointer is always resolved by Load; the nil check
+// only guards hand-built values.
+func (s Share) ProbeMediaDurations() bool { return s.MediaDurations != nil && *s.MediaDurations }
 
 // CronSchedule returns the effective cron expression ("" = none).
 func (s Share) CronSchedule() string {
