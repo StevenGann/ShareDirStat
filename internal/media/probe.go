@@ -117,6 +117,30 @@ func (p *probeReader) read(off int64, n int) []byte {
 	return p.readInto(off, make([]byte, n))
 }
 
+// remaining returns the bytes between off and end as an unsigned count, and
+// false when off is negative or already past end.
+//
+// Container walkers compare unsigned size fields read out of the file
+// against the space actually left, so this and asOffset are the only two
+// places offsets cross between signed and unsigned. Keeping the crossing
+// here means each conversion has its bound checked on the line above it
+// rather than inferred from a caller's loop condition.
+func remaining(off, end int64) (uint64, bool) {
+	if off < 0 || off > end {
+		return 0, false
+	}
+	return uint64(end - off), true //nolint:gosec // end >= off >= 0, checked above
+}
+
+// asOffset narrows a file-supplied size, already bounded by remaining,
+// back into an offset.
+func asOffset(size uint64) (int64, bool) {
+	if size > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(size), true
+}
+
 // toSeconds converts a duration in seconds to the Probe result: rounded half
 // up, minimum 1 for any positive duration; NaN, Inf, zero, negative and
 // values that overflow uint32 report false.

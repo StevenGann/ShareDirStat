@@ -28,6 +28,10 @@ func probeISOBMFF(p *probeReader) (uint32, bool) {
 // [off, end) so a corrupt size field terminates the walk instead of running
 // away.
 func readBoxHeader(p *probeReader, off, end int64) (typ string, dataOff, dataLen int64, ok bool) {
+	room, ok := remaining(off, end)
+	if !ok {
+		return "", 0, 0, false
+	}
 	var h [16]byte
 	b := p.readInto(off, h[:])
 	if len(b) < 8 {
@@ -44,10 +48,12 @@ func readBoxHeader(p *probeReader, off, end int64) (typ string, dataOff, dataLen
 			return "", 0, 0, false
 		}
 		wide := binary.BigEndian.Uint64(b[8:16])
-		if wide > uint64(end-off) {
+		if wide > room {
 			return "", 0, 0, false
 		}
-		size = int64(wide)
+		if size, ok = asOffset(wide); !ok {
+			return "", 0, 0, false
+		}
 		hdr = 16
 	}
 	if size < hdr || off+size > end {

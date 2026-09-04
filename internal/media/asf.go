@@ -30,13 +30,17 @@ func probeASF(p *probeReader) (uint32, bool) {
 	}
 	off := int64(30)
 	for i := uint32(0); i < count && off+24 <= p.size; i++ {
+		room, ok := remaining(off, p.size)
+		if !ok {
+			return 0, false
+		}
 		var oh [92]byte // object header + the File Properties fields we need
 		ob := p.readInto(off, oh[:])
 		if len(ob) < 24 {
 			return 0, false
 		}
 		size := binary.LittleEndian.Uint64(ob[16:24])
-		if size < 24 || size > uint64(p.size-off) {
+		if size < 24 || size > room {
 			return 0, false
 		}
 		if [16]byte(ob[0:16]) == asfFilePropsGUID {
@@ -60,7 +64,11 @@ func probeASF(p *probeReader) (uint32, bool) {
 			}
 			return toSeconds(float64(play-prerollUnits) / 1e7)
 		}
-		off += int64(size)
+		step, ok := asOffset(size)
+		if !ok {
+			return 0, false
+		}
+		off += step
 	}
 	return 0, false
 }
