@@ -3,7 +3,7 @@ module github.com/StevenGann/ShareDirStat
 go 1.27
 
 require (
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/sys v0.47.0
