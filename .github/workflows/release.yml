@@ -24,7 +24,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go test -race -count=1 ./...
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: web/dist
@@ -67,7 +67,7 @@ jobs:
           cp LICENSE README.md config.example.yaml dist/$NAME/
           tar -C dist -czf dist/$NAME.tar.gz $NAME
           rm -r dist/$NAME
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.tar.gz
@@ -142,7 +142,7 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
           upload-artifact: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom.spdx.json
@@ -177,7 +177,7 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push dist/sharedirstat-*.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: helm-chart
           path: dist/*.tgz

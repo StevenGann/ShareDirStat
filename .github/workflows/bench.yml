@@ -42,7 +42,7 @@ jobs:
           go test -run XXX -bench BenchmarkQueries -benchtime 50x ./internal/model/ | tee -a bench-model.txt
       - name: Scan throughput
         run: ./hack/bench.sh 500000 | tee bench-scan.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bench-${{ matrix.arch }}
           path: bench-*.txt
